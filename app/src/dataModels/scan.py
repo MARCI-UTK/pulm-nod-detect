@@ -1,8 +1,9 @@
+import os
 import numpy as np
 import pandas as pd
 import SimpleITK as sitk
 
-from ..util import util
+from ..util.util import scanPathToId, windowImage
 
 class RawScan(): 
     def __init__(self, mhdPath, maskPath, annotationPath, outputPath): 
@@ -32,7 +33,7 @@ class RawScan():
 
         img = sitk.ReadImage(fileName=path)
 
-        self.scanId = util.scanPathToId(path=path)
+        self.scanId = scanPathToId(path=path)
         self.rawImg = sitk.GetArrayFromImage(image=img)
         self.origin = img.GetOrigin()
         self.spacing = img.GetSpacing()
@@ -49,7 +50,7 @@ class RawScan():
             scanSlice = scan[i]
             maskSlice = self.mask[i]
 
-            windowedScan = util.windowImage(img=scanSlice, window=600, level=-1200) 
+            windowedScan = windowImage(img=scanSlice, window=600, level=-1200) 
             normalizedPixelSlice = (windowedScan // 256).astype('uint8')
 
             maskedScan = normalizedPixelSlice * maskSlice
@@ -79,5 +80,34 @@ class RawScan():
 
 class CleanScan(): 
     def __init__(self, npyPath): 
-        self.scanId = util.scanPathToId(npyPath)
+        self.scanId = scanPathToId(npyPath)
         self.img    = np.load(npyPath)
+
+        self.origin = None
+        self.spacing = None
+        self.annotations = None 
+
+        self.readMhdData()
+        self.get_scan_nodule_locations()
+
+    def readMhdData(self): 
+        reader = sitk.ImageFileReader()
+
+        mhdPath = os.path.join('data', 'images', 'subset0', f'{self.scanId}.mhd')
+        reader.SetFileName(fn=mhdPath)
+        reader.LoadPrivateTagsOn()
+        reader.ReadImageInformation()
+
+        self.origin  = reader.GetOrigin()
+        self.spacing = reader.GetSpacing()
+
+    def get_scan_nodule_locations(self): 
+        annotations = pd.read_csv('data/annotations.csv')
+        scan_annotations = annotations[annotations['seriesuid'] == self.scanId]
+
+        nodule_locations = []
+        for _, row in scan_annotations.iterrows(): 
+            loc = (row['coordX'], row['coordY'], row['coordZ'], row['diameter_mm'])
+            nodule_locations.append(loc)
+        
+        self.annotations = nodule_locations
