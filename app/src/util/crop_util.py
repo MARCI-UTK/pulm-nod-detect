@@ -39,7 +39,8 @@ def generateCrops(scanList: list, cropsPerScan: int, outputPath: str) -> list:
 
         label = 0  
         for c, anchor in crops: 
-            if len(s.annotations) == 0: 
+            if len(s.annotations) == 0:
+                print('annotations len = 0')
                 continue
             
             for i in s.annotations: 
@@ -74,6 +75,7 @@ def scanListFromNpy(path: str) -> list:
     rv = []
 
     for f in os.listdir(path):
+        print(path, f)
         rv.append(CleanScan(os.path.join(path, f)))
 
     return rv

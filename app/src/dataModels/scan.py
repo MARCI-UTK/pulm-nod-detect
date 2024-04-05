@@ -93,7 +93,8 @@ class CleanScan():
     def readMhdData(self): 
         reader = sitk.ImageFileReader()
 
-        mhdPath = os.path.join('data', 'images', 'subset0', f'{self.scanId}.mhd')
+        #mhdPath = os.path.join('data', 'images', 'subset0', f'{self.scanId}.mhd')
+        mhdPath = f'/data/marci/dlewis37/luna16/scan/subset0/{self.scanId}.mhd'
         reader.SetFileName(fn=mhdPath)
         reader.LoadPrivateTagsOn()
         reader.ReadImageInformation()
@@ -102,7 +103,7 @@ class CleanScan():
         self.spacing = reader.GetSpacing()
 
     def get_scan_nodule_locations(self): 
-        annotations = pd.read_csv('data/annotations.csv')
+        annotations = pd.read_csv('/data/marci/dlewis37/luna16/csv/annotations.csv')
         scan_annotations = annotations[annotations['seriesuid'] == self.scanId]
 
         nodule_locations = []
