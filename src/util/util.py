@@ -1,50 +1,13 @@
-import matplotlib.pyplot as plt 
 import numpy as np
-import scipy
-from scipy import ndimage
-from skimage import morphology
+from dataModels.crop import Crop
 
-i = 0
+import matplotlib.pyplot as plt 
+from matplotlib.patches import Circle
 
-def show_slice(img: [], save=False): 
-    plt.imshow(img, cmap='grey')
-    
-    plt.xticks([])
-    plt.yticks([])
+def scanPathToId(path: str) -> str: 
+    return path.split('/')[-1][0:-4]
 
-    if save: 
-        global i
-        plt.savefig('example_images/{}.png'.format(i))
-        i += 1
-
-    plt.show()
-
-def show_comparison(origImg: [], newImg: []): 
-    fig, axes = plt.subplots(nrows=1, ncols=2, sharex=True, sharey=True, figsize=(12, 6))
-    axes[0].imshow(origImg, cmap='gray')
-    axes[0].axis('off')
-
-    axes[1].imshow(newImg, cmap='gray')
-    axes[1].axis('off') 
-    
-    global i
-    plt.savefig('example_images/{}.png'.format(i))
-    i += 1
-    
-    plt.show()
-
-def show_contour(img, contours):
-    fig, ax = plt.subplots()
-    ax.imshow(img, cmap='gray')
-    for contour in contours:
-        ax.plot(contour[:, 1], contour[:, 0], linewidth=1)
-
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    plt.show()
-
-def window_image(img: list, window: int, level: int) -> []: 
+def windowImage(img: list, window: int, level: int) -> list: 
     min_hu = level - (window // 2)
     max_hu = level + (window // 2)
 
@@ -52,50 +15,80 @@ def window_image(img: list, window: int, level: int) -> []:
     windowed_img = np.clip(windowed_img, -1200, 600)
 
     return windowed_img
-        
-def is_contour_closed(ct):
-    ct_start = np.array((ct[0, 1], ct[0, 0]))
-    ct_end   = np.array((ct[-1, 1], ct[-1, 0]))
 
-    distance = np.linalg.norm(ct_start - ct_end)
+def worldToVoxel(world_point: tuple, world_origin: tuple, spacing: tuple) -> tuple: 
+    world_x, world_y, world_z, diameter = world_point
+    origin_x, origin_y, origin_z        = world_origin
+    spacing_x, spacing_y, spacing_z     = spacing
 
-    if distance == 0: 
-        return True
-    else: 
-        return False
-    
-def choose_contours(contours):
-    lung_contours = []
-    volumes       = []
+    voxel_x = (world_x - origin_x) // spacing_x
+    voxel_y = (world_y - origin_y) // spacing_y
+    voxel_z = (world_z - origin_z) // spacing_z
 
-    for ct in contours: 
-        hull = scipy.spatial.ConvexHull(ct)
+    voxel_diameter = diameter // spacing_x
 
-        if hull.volume > 2000 and is_contour_closed(ct): 
-            lung_contours.append(ct)
-            volumes.append(hull.volume)
+    voxel_point = (int(voxel_x), int(voxel_y), int(voxel_z), int(voxel_diameter))
 
-    if len(lung_contours) == 2: 
-        return lung_contours
-    else: 
-        vol, ct = (list(t) for t in zip(*sorted(zip(volumes, lung_contours))))
-        lung_contours = lung_contours[0:2]
+    return(voxel_point)
 
-        return lung_contours
-    
-def rm_noise(img: list): 
-    segmentation = morphology.dilation(img, np.ones(shape=(1, 1)))
-    labels, _ = ndimage.label(segmentation)
-    
-    label_count = np.bincount(labels.ravel().astype(int))
-    label_count[0] = 0
+def cropCube(scan: np.array, numCubes: int) -> list: 
+    crops = []
 
-    mask = labels == label_count.argmax()
+    for _ in numCubes:
+        randX = np.random.randint(0, scan.shape[2] - 96)
+        randY = np.random.randint(0, scan.shape[1] - 96)
+        randZ = np.random.randint(0, scan.shape[0] - 96)
 
-    mask = morphology.dilation(mask, np.ones((1, 1)))
-    mask = ndimage.binary_fill_holes(mask)
-    mask = morphology.dilation(mask, np.ones((3, 3)))
+        crop = scan[randZ:randZ + 96, randY:randY + 96, randX:randX + 96]
 
-    maskedImg = mask * img
-    
-    return maskedImg
+        crops.append(crop)
+
+    return crops
+
+def scanToCropNoduleLocation(anchor_point, nodule_voxel_location): 
+    vox_x, vox_y, vox_z, diameter = nodule_voxel_location
+    rand_x, rand_y, rand_z = anchor_point
+
+    crop_loc_x, crop_loc_y, crop_loc_z = (vox_x - rand_x, vox_y - rand_y, vox_z - rand_z)
+    print(crop_loc_x, crop_loc_y, crop_loc_z)
+
+
+def generateCrops(scanList: list, cropsPerScan: int, outputPath: str) -> list: 
+    rv = []
+
+    for s in scanList: 
+        crops = cropCube(s, cropsPerScan)
+
+        label = 0  
+        for c in crops: 
+            if len(s.annotations) == 0: 
+                continue
+            
+            for i in s.annotations: 
+                nodule_voxel_location  = worldToVoxel(world_point=i, world_origin=s.origin, spacing=s.spacing)
+                vox_x, vox_y, vox_z, _ = nodule_voxel_location
+
+                anchor_point = (c[2,0], c[1,0], c[0,0])
+                x0, y0, z0   = anchor_point
+
+                if (vox_x in range(x0, x0 + 96)) and (vox_y in range(y0, y0 + 96)) and (vox_z in range(z0, z0 + 96)): 
+                    crop_location = scanToCropNoduleLocation(anchor_point=anchor_point, 
+                                                             nodule_voxel_location=nodule_voxel_location)
+                    
+                    label = 1
+
+                    ax = plt.gca()
+                    ax.cla()
+
+                    slice_idx = crop_location[2]
+                    ax.imshow(c[slice_idx], cmap='gray')
+
+                    circle = Circle((crop_location[0], crop_location[1]), crop_location[3], color='r', fill=False)
+                    ax.add_patch(circle)
+
+                    plt.title(s.scan_id)
+                    plt.show
+            
+            rv.append(Crop(scanId=s.scanId, img=c, label=label, outputPath=outputPath))
+
+    return rv
