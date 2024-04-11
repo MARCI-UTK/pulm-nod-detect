@@ -55,6 +55,7 @@ def generateCrops(scanList: list, cropsPerScan: int, outputPath: str) -> list:
                     
                     label = 1
 
+                    """
                     ax = plt.gca()
                     ax.cla()
 
@@ -66,6 +67,7 @@ def generateCrops(scanList: list, cropsPerScan: int, outputPath: str) -> list:
 
                     plt.title(s.scanId)
                     plt.show
+                    """
             
             rv.append(Crop(scanId=s.scanId, img=c, label=label, outputPath=outputPath))
 
@@ -74,8 +76,7 @@ def generateCrops(scanList: list, cropsPerScan: int, outputPath: str) -> list:
 def scanListFromNpy(path: str) -> list: 
     rv = []
 
-    for f in os.listdir(path):
-        print(path, f)
+    for f in os.listdir(path): 
         rv.append(CleanScan(os.path.join(path, f)))
 
     return rv

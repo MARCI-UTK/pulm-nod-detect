@@ -2,16 +2,19 @@ import os
 import numpy as np
 import pandas as pd
 import SimpleITK as sitk
+import json
 
 from ..util.util import scanPathToId, windowImage
 
 class RawScan(): 
-    def __init__(self, mhdPath, maskPath, annotationPath, outputPath): 
+    def __init__(self, mhdPath, maskPath, annotationPath, 
+                 npyPath, jsonPath): 
         self.mhdPath = mhdPath
         self.maskPath = maskPath
-        self.outputPath = outputPath
+        self.npyPath = npyPath
+        self.jsonPath = jsonPath
         self.annotationPath = annotationPath
-        
+     
         self.scanId      = None
         self.origin      = None
         self.spacing     = None 
@@ -75,8 +78,16 @@ class RawScan():
         self.annotations = nodule_locations
     
     def writeProcessedScan(self): 
-        np.save(self.outputPath, self.cleanImg)
-        print(f'wrote to {self.outputPath}.')
+        metadata = {
+            'origin': self.origin, 
+            'spacing': self.spacing
+        }
+
+        with open(self.jsonPath, "w") as f:
+            json.dump(metadata, f)
+
+        np.save(self.npyPath, self.cleanImg)
+        print(f'wrote data for {self.scanId}.')
 
 class CleanScan(): 
     def __init__(self, npyPath): 
@@ -87,20 +98,11 @@ class CleanScan():
         self.spacing = None
         self.annotations = None 
 
-        self.readMhdData()
+        self.readMetadata()
         self.get_scan_nodule_locations()
 
-    def readMhdData(self): 
-        reader = sitk.ImageFileReader()
-
-        #mhdPath = os.path.join('data', 'images', 'subset0', f'{self.scanId}.mhd')
-        mhdPath = f'/data/marci/dlewis37/luna16/scan/subset0/{self.scanId}.mhd'
-        reader.SetFileName(fn=mhdPath)
-        reader.LoadPrivateTagsOn()
-        reader.ReadImageInformation()
-
-        self.origin  = reader.GetOrigin()
-        self.spacing = reader.GetSpacing()
+    def readMetadata(self): 
+        
 
     def get_scan_nodule_locations(self): 
         annotations = pd.read_csv('/data/marci/dlewis37/luna16/csv/annotations.csv')
