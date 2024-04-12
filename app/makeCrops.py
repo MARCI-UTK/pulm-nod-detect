@@ -1,11 +1,11 @@
 import os
-from src.util.crop_util import scanListFromNpy, generateCrops
+from src.util.crop_util import generateCrops
 
 dataPath = '/data/marci/dlewis37/luna16/'
 
 def main():  
-    cleanScanList = scanListFromNpy(os.path.join(dataPath, 'processed_scan/'))
-    cropList = generateCrops(scanList=cleanScanList, cropsPerScan=2, outputPath=os.path.join(dataPath, 'crop'))
+    cropList = generateCrops(dataPath=dataPath, cropsPerScan=2)
+    print(len(cropList))
 
     return 
 

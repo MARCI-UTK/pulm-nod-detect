@@ -83,8 +83,9 @@ class RawScan():
             'spacing': self.spacing
         }
 
-        with open(self.jsonPath, "w") as f:
-            json.dump(metadata, f)
+        f = open(self.jsonPath, 'w')
+        json.dump(metadata, f)
+        f.close()
 
         np.save(self.npyPath, self.cleanImg)
         print(f'wrote data for {self.scanId}.')
@@ -98,11 +99,17 @@ class CleanScan():
         self.spacing = None
         self.annotations = None 
 
-        self.readMetadata()
+        self.readMetadata(npyPath=npyPath)
         self.get_scan_nodule_locations()
 
-    def readMetadata(self): 
+    def readMetadata(self, npyPath): 
+        metadataPath = npyPath[:-4] + '.json'
         
+        with open(metadataPath, 'r') as f:
+            metadata = json.load(f)
+
+        self.origin = metadata['origin']
+        self.spacing = metadata['spacing']
 
     def get_scan_nodule_locations(self): 
         annotations = pd.read_csv('/data/marci/dlewis37/luna16/csv/annotations.csv')

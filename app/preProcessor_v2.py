@@ -10,9 +10,8 @@ dataPath = '/data/marci/dlewis37/luna16/'
 annotationPath = os.path.join(dataPath, 'annotations.csv')
 
 def main():
-    rawScanList = []
-   
-    for i in range(1, 10):              
+
+    for i in range(10):              
         for mhdPath in glob.glob(os.path.join(dataPath, f'scan/subset{i}', '*.mhd')):   
             scanId = scanPathToId(mhdPath)
 
