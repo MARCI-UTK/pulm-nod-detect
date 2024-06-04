@@ -1,13 +1,36 @@
+import matplotlib
+matplotlib.use('Agg')
+
 import os 
 import glob
+import math
+import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Rectangle
 
 from .util import worldToVoxel
 from ..dataModels.crop import Crop
 from ..dataModels.scan import CleanScan
 
+def noduleLocationToBb(location, img): 
+    theta = math.pi / 4.0  
+    x, y, z, d = location
+
+    w = math.cos(theta) * d
+    h = math.sin(theta) * d
+
+    x1 = int(x - (w // 2)) - 1
+    y1 = int(y - (h // 2)) - 1
+    x2 = int(x + (w // 2)) + 1
+    y2 = int(y + (h // 2)) + 1
+
+    #imgBb = cv.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), thickness=1)
+    imgBb = img
+
+    pltCoords = (x1, y1, w + 2, h + 2)
+
+    return (imgBb, pltCoords)
 
 def cropCube(scan: np.array, numCubes: int) -> list: 
     crops = []
@@ -44,11 +67,12 @@ def generateCrops(dataPath: str, cropsPerScan: int):
 
         crops = cropCube(scan=scan.img, numCubes=cropsPerScan)
 
-        label = 0
         for c, anchor in crops: 
+            label = 0
+
             if len(scan.annotations) == 0: 
                 continue 
-
+        
             for i in scan.annotations: 
                 nodule_voxel_location  = worldToVoxel(world_point=i, world_origin=scan.origin, 
                                                       spacing=scan.spacing)
@@ -60,7 +84,23 @@ def generateCrops(dataPath: str, cropsPerScan: int):
                     crop_location = scanToCropNoduleLocation(anchor_point=anchor, 
                                                              nodule_voxel_location=nodule_voxel_location,
                                                              spacing=scan.spacing)
-                                                            
+
+                    bb, rectCoords = noduleLocationToBb(crop_location, c[crop_location[2]])
+
+                    xy = (rectCoords[0], rectCoords[1])
+                    w, h  = rectCoords[2], rectCoords[3]
+
+                    ax = plt.gca()
+                    ax.cla()
+
+                    ax.imshow(c[crop_location[2]], cmap='gray')
+
+                    rect = Rectangle(xy=xy, width=w, height=h, color='r', fill=False)
+                    ax.add_patch(rect)
+
+                    #plt.imshow(c[crop_location[2]], cmap='gray')
+                    plt.savefig('test_imgs/bb.png')
+
                     label = 1
                     break
             

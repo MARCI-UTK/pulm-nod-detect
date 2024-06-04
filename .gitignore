@@ -1,5 +1,6 @@
 venv/
 dataset/
 data/ 
-example_images/
+test_imgs/
+graphs/
 .DS_Store/

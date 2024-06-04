@@ -8,7 +8,7 @@ def windowImage(img: list, window: int, level: int) -> list:
     max_hu = level + (window // 2)
 
     windowed_img = np.copy(img)
-    windowed_img = np.clip(windowed_img, -1200, 600)
+    windowed_img = np.clip(windowed_img, min_hu, max_hu)
 
     return windowed_img
 

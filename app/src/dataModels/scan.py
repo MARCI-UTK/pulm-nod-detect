@@ -6,19 +6,27 @@ import json
 
 from ..util.util import scanPathToId, windowImage
 
+# Class to handle scan preprocessing operations 
 class RawScan(): 
     def __init__(self, mhdPath, maskPath, annotationPath, 
-                 npyPath, jsonPath): 
+                 npyPath, jsonPath):
+
+        # Save input data 
         self.mhdPath = mhdPath
         self.maskPath = maskPath
         self.npyPath = npyPath
         self.jsonPath = jsonPath
         self.annotationPath = annotationPath
-     
+
+        # Data read from .mhd 
         self.scanId      = None
         self.origin      = None
         self.spacing     = None 
+        
+        # Nodule locations within scan 
         self.annotations = None 
+
+        # Image arrays 
         self.rawImg      = None 
         self.cleanImg    = None 
         self.mask        = None
@@ -26,11 +34,13 @@ class RawScan():
         self.processScan()
         self.writeProcessedScan()
 
+    # Read scan and mask, pass to processing function 
     def processScan(self):
         self.readMhd()
         self.readMask()
         self.cleanScan()
 
+    # Read scan and extract metadata
     def readMhd(self):
         path = self.mhdPath
 
@@ -41,22 +51,30 @@ class RawScan():
         self.origin = img.GetOrigin()
         self.spacing = img.GetSpacing()
 
+    # Read segmenation mask 
     def readMask(self): 
         mask = sitk.ReadImage(fileName=self.maskPath)
         self.mask = sitk.GetArrayFromImage(image=mask)
 
+    # Perform preprocessing operations on scan 
     def cleanScan(self): 
         cleanScan = []
         scan = self.rawImg
 
+        # Iterate through each slice in scan 
         for i in range(len(scan)):
             scanSlice = scan[i]
             maskSlice = self.mask[i]
 
+            # Window and level Hounsfield range 
             windowedScan = windowImage(img=scanSlice, window=600, level=-1200) 
+
+            # Normalize pixels to be 0-256
             normalizedPixelSlice = (windowedScan // 256).astype('uint8')
 
+            # Apply mask to scan 
             maskedScan = normalizedPixelSlice * maskSlice
+
             maskHighVals = (maskedScan == 0)
 
             final = np.copy(scanSlice)
@@ -66,6 +84,7 @@ class RawScan():
 
         self.cleanImg = cleanScan
 
+    # Get nodule locations corresponding to current scan ID 
     def get_scan_nodule_locations(self): 
         annotations = pd.read_csv(self.annotationPath)
         scan_annotations = annotations[annotations['seriesuid'] == self.scanId]
@@ -77,6 +96,7 @@ class RawScan():
         
         self.annotations = nodule_locations
     
+    # Write processed image as .npy and metadata as .json files 
     def writeProcessedScan(self): 
         metadata = {
             'origin': self.origin, 
@@ -90,6 +110,7 @@ class RawScan():
         np.save(self.npyPath, self.cleanImg)
         print(f'wrote data for {self.scanId}.')
 
+# Class that holds preprocessed scan and its metadata for crop generation
 class CleanScan(): 
     def __init__(self, npyPath): 
         self.scanId = scanPathToId(npyPath)

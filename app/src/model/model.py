@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import matplotlib.pyplot as plt
+
 class Bottle2Neck3d(nn.Module):
     expansion = 4
 
@@ -23,7 +25,6 @@ class Bottle2Neck3d(nn.Module):
         self.conv1 = nn.Conv3d(inplanes, width*scale, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm3d(width*scale)
 
-        """
         if scale == 1:
           self.nums = 1
         else:
@@ -43,7 +44,6 @@ class Bottle2Neck3d(nn.Module):
         self.conv3 = nn.Conv3d(width*scale, planes * self.expansion, kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm3d(planes * self.expansion)
 
-        """
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stype = stype
@@ -54,8 +54,6 @@ class Bottle2Neck3d(nn.Module):
         residual = x
 
         out = self.conv1(x)
-
-        """
         out = self.bn1(out)
         out = self.relu(out)
 
@@ -87,7 +85,6 @@ class Bottle2Neck3d(nn.Module):
 
         out += residual
         out = self.relu(out)
-        """
 
         return out
     
@@ -96,26 +93,22 @@ class TestModel(nn.Module):
         super().__init__() 
 
         self.conv1 = nn.Conv3d(1, 1, 3)
-        self.conv2 = nn.Conv3d(1, 1, 3)
 
-        self.bottle2neck3d = Bottle2Neck3d(3, 1)
+        self.bottle2neck3d = Bottle2Neck3d(inplanes=1, planes=3)
 
         self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(778688, 50)
-        self.fc2 = nn.Linear(50, 25)
-        self.fc3 = nn.Linear(25, 1)
+        self.fc2 = nn.Linear(50, 1)
 
     def forward(self, x):
        
       x = self.conv1(x)
-      x = self.conv2(x)
 
-      #x = self.bottle2neck3d(x)
+      x = self.bottle2neck3d(x)
       
       x = self.flatten(x)
       x = F.relu(self.fc1(x))
-      x = F.relu(self.fc2(x))
-      x = torch.sigmoid(self.fc3(x))
+      x = torch.sigmoid(self.fc2(x))
 
       return x
     
