@@ -1,81 +1,73 @@
 import os
 import torch 
 from torch.utils.data import DataLoader
-from torch.nn.modules.loss import BCELoss
-import torch.nn as nn
-import numpy as np
 import torch.optim as optim
-import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from src.model.data import CropDataset
-from src.model.model import TestModel
+from src.model.rpn_loss import RegLoss, ClsLoss
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+from rpn import RPN
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 dataPath = '/data/marci/dlewis37/luna16/'
 
 def main(): 
-    paths = [os.path.join(dataPath, 'dataset', f) for f in os.listdir(os.path.join(dataPath, 'dataset'))]
+    img_paths = [os.path.join(dataPath, 'dataset', f) for f in os.listdir(os.path.join(dataPath, 'dataset'))]
+    label_paths = [os.path.join(dataPath, 'rpn_labels', f) for f in os.listdir(os.path.join(dataPath, 'rpn_labels'))]
     
-    dataset = CropDataset(paths=paths)
+    dataset = CropDataset(img_paths=img_paths, label_paths=label_paths)
+    batch_size = 32
 
-    dataLoader = DataLoader(
+    train_loader = DataLoader(
         dataset=dataset,
-        batch_size=5, 
+        batch_size=batch_size, 
         shuffle=True
     )
 
-    pos = 0
-    neg = 0
+    model = RPN(128, 512, 3)
+    model = torch.nn.DataParallel(model, device_ids=[0,1,2,3])
+    model.to(f'cuda:{model.device_ids[0]}')
 
-    for idx, data in enumerate(dataLoader): 
-        x, y = data
-        neg += len([i for i in y if i == 0])
-        pos += len([i for i in y if i == 1])
+    optimizer = optim.Adam(model.parameters(), lr=0.0001 )
+    reg_loss_func = RegLoss()
+    cls_loss_func = ClsLoss()
 
-    print(pos, neg)
-    return
-
-    model = TestModel()
-    model.to(device)
-    lossFunc = BCELoss()
-    optimizer = optim.Adam(model.parameters())
-
-    epochs = 20
-    losses = []
+    epochs = 15
     for e in range(epochs): 
 
-        totalEpochLoss = 0
-        for idx, data in enumerate(dataLoader): 
-            x, y = data
-            y = y.unsqueeze(1)
+        total_epoch_loss = 0
+        with tqdm(train_loader) as pbar:
+            for idx, data in enumerate(pbar):
+                fname, x, y, bb_y = data
 
-            x = x.to(device)
-            y = y.to(device)
-            
-            optimizer.zero_grad()
+                # Make labels correct size 
+                y = y.unsqueeze(1)
 
-            output = model(x)
-            
-            loss = lossFunc(output, y)
+                x = x.to(f'cuda:{model.device_ids[0]}')
+                y = y.to(f'cuda:{model.device_ids[0]}')
+                bb_y = bb_y.to(f'cuda:{model.device_ids[0]}')
+                            
+                optimizer.zero_grad()
 
-            loss.backward()
-            optimizer.step()
+                pred_anch_locs, pred_cls_scores = model(x)
+    
+                cls_loss = cls_loss_func(pred_cls_scores, y, batch_size)
+                bb_loss = reg_loss_func(y, pred_anch_locs, bb_y, batch_size)
 
-            totalEpochLoss += loss.item()
-        
-        avgEpochLoss = totalEpochLoss / len(dataLoader)
-        losses.append(avgEpochLoss)
+                loss = cls_loss + bb_loss
+                loss.backward()
 
-        print(f'finished epoch {e}. Loss: {avgEpochLoss}')
+                optimizer.step()
 
+                total_epoch_loss += loss
+                pbar.set_postfix(loss=loss.item())
 
-    plt.plot(losses)
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Loss per Epoch')
-    plt.savefig('graphs/loss_per_epoch.png')
-
+        avg_epoch_loss = total_epoch_loss / len(train_loader)
+       
+        print(f'finished epoch {e}. Avg. Loss: {avg_epoch_loss}')
+    
     return 
 
 if __name__ == "__main__": 
