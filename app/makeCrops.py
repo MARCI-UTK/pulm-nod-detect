@@ -4,7 +4,7 @@ from src.util.crop_util import generateCrops
 dataPath = '/data/marci/dlewis37/luna16/'
 
 def main():  
-    generateCrops(dataPath=dataPath, cropsPerScan=2)
+    generateCrops(dataPath=dataPath)
 
     return 
 

@@ -1,116 +1,120 @@
 import matplotlib
 matplotlib.use('Agg')
 
+from .util import voxel_to_world
+
 import os 
 import glob
-import math
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
-from .util import worldToVoxel
+
+from .util import worldToVoxel, get_iou
 from ..dataModels.crop import Crop
 from ..dataModels.scan import CleanScan
 
-def noduleLocationToBb(location, img): 
-    theta = math.pi / 4.0  
-    x, y, z, d = location
-
-    w = math.cos(theta) * d
-    h = math.sin(theta) * d
-
-    x1 = int(x - (w // 2)) - 1
-    y1 = int(y - (h // 2)) - 1
-    x2 = int(x + (w // 2)) + 1
-    y2 = int(y + (h // 2)) + 1
-
-    #imgBb = cv.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), thickness=1)
-    imgBb = img
-
-    pltCoords = (x1, y1, w + 2, h + 2)
-
-    return (imgBb, pltCoords)
-
-def cropCube(scan: np.array, numCubes: int) -> list: 
-    crops = []
-
-    for _ in range(numCubes):
-        randX = np.random.randint(0, scan.shape[2] - 96)
-        randY = np.random.randint(0, scan.shape[1] - 96)
-        randZ = np.random.randint(0, scan.shape[0] - 96)
-
-        crop = scan[randZ:randZ + 96, randY:randY + 96, randX:randX + 96]
-
-        crops.append((crop, (randX, randY, randZ)))
-
-    return crops
-
-def scanToCropNoduleLocation(anchor_point, nodule_voxel_location, spacing): 
+def scanToCropCoordinate(center, nodule_voxel_location): 
     vox_x, vox_y, vox_z, diameter = nodule_voxel_location
-    rand_x, rand_y, rand_z = anchor_point
+    x_c, y_c, z_c = center
 
-    crop_loc_x, crop_loc_y, crop_loc_z = (vox_x - rand_x, vox_y - rand_y, vox_z - rand_z)
+    crop_loc_x, crop_loc_y, crop_loc_z = (vox_x - x_c, vox_y - y_c, vox_z - z_c)
     
-    return (crop_loc_x, crop_loc_y, crop_loc_z, diameter // spacing[0])
+    return (crop_loc_x, crop_loc_y, crop_loc_z, diameter)
 
-def generateCrops(dataPath: str, cropsPerScan: int): 
-    shortCount = 0
-    totalCrops = 0
+def get_neg_crop(img): 
+    randX = np.random.randint(0, img.shape[2] - 96)
+    randY = np.random.randint(0, img.shape[1] - 96)
+    randZ = np.random.randint(0, img.shape[0] - 96)
+
+    crop = img[randZ:randZ + 96, randY:randY + 96, randX:randX + 96]
+
+    return crop
+
+def generateCrops(dataPath: str): 
+    
+    # Total statistics 
+    total_crops = 0
+    pos = 0
+    neg = 0 
 
     for npyFile in glob.glob(os.path.join(dataPath, 'processed_scan', '*.npy')):   
         scan = CleanScan(npyPath=npyFile) 
 
         if scan.img.shape[0] < 97: 
-            shortCount += 1
             continue
-
-        crops = cropCube(scan=scan.img, numCubes=cropsPerScan)
-
-        for c, anchor in crops: 
-            label = 0
-
-            if len(scan.annotations) == 0: 
-                continue 
+ 
+        img = scan.img
         
+        if len(scan.annotations) != 0: 
             for i in scan.annotations: 
                 nodule_voxel_location  = worldToVoxel(world_point=i, world_origin=scan.origin, 
                                                       spacing=scan.spacing)
-                vox_x, vox_y, vox_z, _ = nodule_voxel_location
+                
+                nodule_voxel_location = list(nodule_voxel_location)
 
-                x0, y0, z0 = anchor
+                center = [np.random.randint(-10, 11) + nodule_voxel_location[i] for i in range(3)]
+                origin = [x - 48 for x in center]
 
-                if (vox_x in range(x0, x0 + 96)) and (vox_y in range(y0, y0 + 96)) and (vox_z in range(z0, z0 + 96)): 
-                    crop_location = scanToCropNoduleLocation(anchor_point=anchor, 
-                                                             nodule_voxel_location=nodule_voxel_location,
-                                                             spacing=scan.spacing)
+                x_c = center[0]
+                y_c = center[1]
+                z_c = center[2]
 
-                    bb, rectCoords = noduleLocationToBb(crop_location, c[crop_location[2]])
+                if x_c < 48 or y_c < 48 or z_c < 48: 
+                    continue 
+                elif x_c > img.shape[2] - 48 or y_c > img.shape[1] - 48 or z_c > img.shape[0] - 48: 
+                    continue  
 
-                    xy = (rectCoords[0], rectCoords[1])
-                    w, h  = rectCoords[2], rectCoords[3]
+                nodule_loc = [nodule_voxel_location[i] - origin[i] for i in range(3)]
+                d = [nodule_voxel_location[3]]
+                bbox = nodule_loc + d
+ 
+                crop = img[origin[2]:origin[2] + 96, origin[1]:origin[1] + 96, origin[0]:origin[0] + 96]
 
-                    ax = plt.gca()
-                    ax.cla()
+                outpath = os.path.join(dataPath, 'dataset', f'{scan.scanId}_{str(total_crops)}.npz')
+                np.savez_compressed(file=outpath,
+                                    img=[crop,],
+                                    label=1, 
+                                    bbox=bbox,)
+                
+                print(f'wrote to {outpath}')
 
-                    ax.imshow(c[crop_location[2]], cmap='gray')
+                pos += 1
+                total_crops += 1
 
-                    rect = Rectangle(xy=xy, width=w, height=h, color='r', fill=False)
-                    ax.add_patch(rect)
+                """
+                x = nodule_loc[0] - nodule_voxel_location[3] // 2
+                y = nodule_loc[1] - nodule_voxel_location[3] // 2
+                w = nodule_voxel_location[3]
+                h = nodule_voxel_location[3]
 
-                    #plt.imshow(c[crop_location[2]], cmap='gray')
-                    plt.savefig('test_imgs/bb.png')
+                rect = Rectangle(xy=(x, y), width=w, height=h, fill=False, color='r')
 
-                    label = 1
-                    break
-            
-            outpath = os.path.join(dataPath, 'dataset', f'{scan.scanId}_{str(totalCrops)}.npz')
+                crop = img[origin[2]:origin[2] + 96, origin[1]:origin[1] + 96, origin[0]:origin[0] + 96]
+
+                plt.imshow(crop[nodule_loc[2]], cmap='gray')
+                plt.gca().add_patch(rect)
+                plt.savefig('crop.png')
+                """
+
+        else: 
+            randX = np.random.randint(0, img.shape[2] - 96)
+            randY = np.random.randint(0, img.shape[1] - 96)
+            randZ = np.random.randint(0, img.shape[0] - 96)
+
+            crop = img[randZ:randZ + 96, randY:randY + 96, randX:randX + 96]
+
+            outpath = os.path.join(dataPath, 'dataset', f'{scan.scanId}_{str(total_crops)}.npz')
             np.savez_compressed(file=outpath,
-                                img=[c,],
-                                label=label)
+                                img=[crop,],
+                                label=0, 
+                                bbox=[0, 0, 0, 0],)
             
-            print(f'wrote crop to {outpath}.')
-            totalCrops += 1
+            print(f'wrote to {outpath}')
             
-    print(f'shortCount: {shortCount}')
-    print(f'totalCrops: {totalCrops}')
+            neg += 1
+            total_crops += 1
+
+    print(f'total crops: {total_crops}. positive: {pos}. negative: {neg}')
+    
