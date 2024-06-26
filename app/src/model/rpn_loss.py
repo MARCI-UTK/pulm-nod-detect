@@ -13,10 +13,10 @@ class RegLoss(nn.Module):
         mask = torch.where(labels > 0, 1, 0)
         mask = mask.permute(0, 2, 1)
 
-        for i in range(batch_size): 
-            rv += 10 * (loss[i] * mask[i]).sum()
+        for i in range(len(loss)): 
+            rv += 20 * (loss[i] * mask[i]).sum()
 
-        return rv / 32
+        return rv / len(loss)
     
 
 class ClsLoss(nn.Module):
@@ -30,7 +30,7 @@ class ClsLoss(nn.Module):
         loss = F.binary_cross_entropy(input=pred, target=mask, reduction='none')
         mask = torch.where(targets < 0, 0, 1)
 
-        for i in range(batch_size): 
-            rv += (1 / batch_size) * (loss[i] * mask[i]).sum()
+        for i in range(len(loss)): 
+            rv += (1. / 32) * (loss[i] * mask[i]).sum()
 
-        return rv / 32
+        return rv / len(loss)

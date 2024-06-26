@@ -11,8 +11,6 @@ from src.model.feature_extractor import FeatureExtractor
 
 # Output of Nature paper before RPN is 24x24x24x128
 
-
-
 class RPN(nn.Module): 
     def __init__(self, in_channels: int, mid_channels: int, n_anchor: int): 
         super(RPN, self).__init__()
@@ -42,8 +40,12 @@ class RPN(nn.Module):
         pred_anc_locs = self.conv_reg(x)
         pred_cls_scores = self.conv_cls(x)
 
-        pred_anc_locs = pred_anc_locs.permute(0, 2, 3, 4, 1).contiguous().view(8, 24 * 24 * 24 * 3, 4)
-        pred_cls_scores = torch.sigmoid(pred_cls_scores.permute(0, 2, 3, 4, 1).contiguous().view(8, 1, 24 * 24 * 24 * 3))
+        pred_anc_locs = pred_anc_locs.permute(0, 2, 3, 4, 1).contiguous()
+        pred_anc_locs = pred_anc_locs.view(pred_anc_locs.shape[0], 24 * 24 * 24 * 3, 4)
+
+        pred_cls_scores = pred_cls_scores.permute(0, 2, 3, 4, 1).contiguous()
+        pred_cls_scores = pred_cls_scores.view(pred_cls_scores.shape[0], 1, 24 * 24 * 24 * 3)
+        pred_cls_scores = torch.sigmoid(pred_cls_scores)
 
         return pred_anc_locs, pred_cls_scores
 
