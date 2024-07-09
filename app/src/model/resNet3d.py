@@ -39,7 +39,7 @@ class ResNet3d(nn.Module):
         self.block4 = self._make_blocks(self.channels_list[2]*self.expansion , self.channels_list[3], self.repeatition_list[3], self.expansion, self.is_Bottleneck, stride=2)
 
         self.average_pool = nn.AdaptiveAvgPool3d(1)
-        self.fc1 = nn.Linear( self.channels_list[3]*self.expansion , num_classes)
+        # self.fc1 = nn.Linear( self.channels_list[3]*self.expansion, num_classes)
 
     def forward(self,x):
 
@@ -53,11 +53,11 @@ class ResNet3d(nn.Module):
         x = self.block3(x)
         x = self.block4(x)
         
-        x = self.average_pool(x)
+        #x = self.average_pool(x)
 
-        x = torch.flatten(x, 1)
-        x = self.fc1(x)
-        x = torch.sigmoid(x)
+        #x = torch.flatten(x, 1)
+        #x = self.fc1(x)
+        #x = torch.sigmoid(x)
 
         return x
 

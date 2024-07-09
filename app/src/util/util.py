@@ -1,5 +1,8 @@
+import torch 
 import numpy as np
 import functools
+import itertools
+from numpy.random import default_rng
 
 def scanPathToId(path: str) -> str: 
     return path.split('/')[-1][0:-4]
@@ -78,3 +81,54 @@ def corners_2_xyzd(c):
     xyz.append(d)
 
     return xyz
+
+# targets.shape = [32, 1, 41472]
+def sample_anchor_boxes(pred, targets, device): 
+
+    # targets_batch.shape = [32, 41472]
+    targets_batch = targets[:, 0, :]
+    pred_batch = pred[:, 0, :]
+
+    loss_targets = []
+    loss_pred = []
+
+    # Iterate through each sample in minibatch 
+    for i in range(len(targets_batch)): 
+
+        # Anchor box targets and predictions for sample (all anchor boxes)
+        t = targets_batch[i]
+        p = pred_batch[i]
+
+        # Get indexes of positve and negative anchor boxes
+        pos_idxs = (t == 1).nonzero(as_tuple=False)
+        neg_idxs = (t == 0).nonzero(as_tuple=False)
+
+        # Number of negative samples needed is (32 - # of positive samples) 
+        neg_idxs = neg_idxs[torch.randint(0, len(neg_idxs), size=(32 - len(pos_idxs),))]
+
+        neg_idxs = neg_idxs.squeeze(1)
+        pos_idxs = pos_idxs.squeeze(1)
+
+        # Select chosen anchor boxes, concatenate them together 
+        # Do this for both targets and predictions 
+
+        pos_t = torch.index_select(t, 0, pos_idxs)    
+        neg_t = torch.index_select(t, 0, neg_idxs)
+        final_t = torch.cat((pos_t, neg_t), 0)
+
+        loss_targets.append(final_t)
+
+        pos_p = torch.index_select(p, 0, pos_idxs)
+        neg_p = torch.index_select(p, 0, neg_idxs)
+        final_p = torch.cat((pos_p, neg_p), 0)
+
+        loss_pred.append(final_p)
+
+    # Stack the mini-batch back together for targets and predictions
+    loss_targets = torch.stack(loss_targets)
+    loss_pred = torch.stack(loss_pred)
+
+    pos_count = (loss_targets == 1).sum().item()
+    neg_count = (loss_targets == 0).sum().item()
+
+    return loss_pred, loss_targets

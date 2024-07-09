@@ -5,7 +5,8 @@ import torch.optim as optim
 from tqdm import tqdm
 
 from src.model.data import CropDataset
-from src.model.rpn_loss import RegLoss, ClsLoss
+from src.model.rpn_loss import RegLoss, ClsLoss, ValClsLoss
+from src.util.util import sample_anchor_boxes
 
 from rpn import RPN
 
@@ -25,14 +26,10 @@ def main():
     train_label_paths = label_paths[:train_label_idxs - 1]
     val_label_paths   = label_paths[train_label_idxs:]
 
-    dataset = CropDataset(img_paths=img_paths, label_paths=label_paths)
     train_data = CropDataset(img_paths=train_img_paths, label_paths=train_label_paths)
     val_data   = CropDataset(img_paths=val_img_paths, label_paths=val_label_paths)
     batch_size = 32
-
-    dataset = CropDataset(img_paths=img_paths, label_paths=label_paths)
-    batch_size = 32
-
+ 
     train_loader = DataLoader(
         dataset=train_data,
         batch_size=batch_size, 
@@ -50,11 +47,17 @@ def main():
     model.to(f'cuda:{model.device_ids[0]}')
 
     optimizer = optim.Adam(model.parameters(), lr=0.0001)
+    #scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
+
     reg_loss_func = RegLoss()
     cls_loss_func = ClsLoss()
+    val_cls_loss_func = ValClsLoss()
 
     train_losses = []
     val_losses = []
+
+    train_accs = []
+    val_accs = []
 
     epochs = 25
     for e in range(epochs): 
@@ -63,6 +66,19 @@ def main():
         avg_cls_loss = 0
         avg_reg_loss = 0
         val_loss = 0
+
+        val_acc = 0
+        train_acc = 0
+
+        t_tp = 0
+        t_tn = 0
+        t_fp = 0
+        t_fn = 0
+
+        v_tp = 0
+        v_tn = 0
+        v_fp = 0
+        v_fn = 0
         
         model.train()
         with tqdm(train_loader) as pbar:
@@ -79,8 +95,10 @@ def main():
                 optimizer.zero_grad()
 
                 pred_anch_locs, pred_cls_scores = model(x)
+
+                sampled_pred, sampled_target = sample_anchor_boxes(pred_cls_scores, y, f'cuda:{model.device_ids[0]}')
     
-                cls_loss = cls_loss_func(pred_cls_scores, y, batch_size)
+                cls_loss = cls_loss_func(sampled_pred, sampled_target, batch_size)
                 bb_loss = reg_loss_func(y, pred_anch_locs, bb_y, batch_size)
 
                 loss = cls_loss + bb_loss
@@ -92,6 +110,16 @@ def main():
                 train_loss += loss.item()
                 avg_cls_loss += cls_loss
                 avg_reg_loss += bb_loss
+
+                pred_binary = torch.where(pred_cls_scores > 0.5, 1., 0.)
+
+                t_tp += ((pred_binary == 1.) & (y == 1.)).sum().item()
+                t_tn += ((pred_binary == 0.) & (y == 0.)).sum().item()
+                t_fp += ((pred_binary == 1.) & (y == 0.)).sum().item()
+                t_fn += ((pred_binary == 0.) & (y == 1.)).sum().item()
+
+                train_acc += (t_tp + t_tn) / (t_tp + t_tn + t_fp + t_fn)
+
                 pbar.set_postfix(loss=loss.item())
 
         model.eval()
@@ -108,25 +136,48 @@ def main():
 
                 pred_anch_locs, pred_cls_scores = model(x)
     
-                cls_loss = cls_loss_func(pred_cls_scores, y, batch_size)
+                cls_loss = val_cls_loss_func(pred_cls_scores, y, batch_size)
                 bb_loss = reg_loss_func(y, pred_anch_locs, bb_y, batch_size)
 
                 loss = cls_loss + bb_loss 
                 val_loss += loss.item()
 
+                pred_binary = torch.where(pred_cls_scores > 0.5, 1., 0.)
+
+                v_tp += ((pred_binary == 1.) & (y == 1.)).sum().item()
+                v_tn += ((pred_binary == 0.) & (y == 0.)).sum().item()
+                v_fp += ((pred_binary == 1.) & (y == 0.)).sum().item()
+                v_fn += ((pred_binary == 0.) & (y == 1.)).sum().item()
+
+                val_acc += (v_tp + v_tn) / (v_tp + v_tn + v_fp + v_fn)
+
+
+        #scheduler.step()
+
         epoch_train_loss = train_loss / len(train_loader)
-        #avg_reg_loss /= len(train_loader)
-        #avg_cls_loss /= len(train_loader)
         train_losses.append(epoch_train_loss)
 
         epoch_val_loss = val_loss / len(val_loader)
         val_losses.append(epoch_val_loss)
 
-        print(f'finished epoch {e}. Train Loss: {epoch_train_loss}. Val Loss: {epoch_val_loss}')
+        epoch_train_acc = train_acc / len(train_loader)
+        train_accs.append(epoch_train_acc)
+
+        epoch_val_acc = val_acc / len(val_loader)
+        val_accs.append(epoch_val_acc)
+
+        print(f'finished epoch {e}. Train Loss: {epoch_train_loss}. Val Loss: {epoch_val_loss}. Train Acc.: {epoch_train_acc}. Val Acc.: {epoch_val_acc}')
+        print(f'train [tp, tn, fp, fn]: [{t_tp}, {t_tn}, {t_fp}, {t_fn}]')
+        print(f'val [tp, tn, fp, fn]: [{v_tp}, {v_tn}, {v_fp}, {v_fn}]')
+
+        #avg_reg_loss /= len(train_loader)
+        #avg_cls_loss /= len(train_loader) 
         #print(f'avg cls loss: {avg_cls_loss}. avg reg loss: {avg_reg_loss}.')
     
     print(f'train losses: {train_losses}.')
     print(f'val losses: {val_losses}.')
+    print(f'train accs: {train_accs}.')
+    print(f'val accs: {val_accs}.')
     return 
 
 if __name__ == "__main__": 

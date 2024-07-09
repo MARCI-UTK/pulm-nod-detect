@@ -26,8 +26,29 @@ class ClsLoss(nn.Module):
     def forward(self, pred, targets, batch_size):
         rv = 0
 
-        mask = torch.where(targets < 1, 0., 1.)
-        loss = F.binary_cross_entropy(input=pred, target=mask, reduction='none')
+        pos_weight = (targets == 0.).sum() / (targets == 1.).sum()
+        loss = F.binary_cross_entropy_with_logits(input=pred, target=targets, pos_weight=pos_weight, reduction='none')
+
+        for i in range(len(loss)): 
+            rv += (1. / 32) * loss[i].sum()
+
+        return rv / len(loss)
+    
+class ValClsLoss(nn.Module):
+    def __init__(self):
+        super(ValClsLoss, self).__init__()
+
+    def forward(self, pred, targets, batch_size):
+        rv = 0
+
+        if (targets == 1.).sum() == 0: 
+            pos_weight = (targets == 0).sum()
+        else: 
+            pos_weight = (targets == 0.).sum() / (targets == 1.).sum()
+            
+        weight = targets * (targets < 0).float()
+
+        loss = F.binary_cross_entropy_with_logits(input=pred, target=targets, pos_weight=pos_weight, weight=weight, reduction='none')
         mask = torch.where(targets < 0, 0, 1)
 
         for i in range(len(loss)): 
