@@ -66,8 +66,6 @@ def get_anc_boxes(centers):
     anchor_boxes = []
     for c in centers: 
         for s in box_sizes: 
-            # Check that box will fit in bounds of image
-            
             tmp = np.append(c, s)
             corners = xyzd_2_corners(tmp)
             anchor_boxes.append(corners)

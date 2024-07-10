@@ -4,6 +4,8 @@ import pandas as pd
 import SimpleITK as sitk
 import json
 
+import matplotlib.pyplot as plt 
+
 from ..util.util import scanPathToId, windowImage
 
 # Class to handle scan preprocessing operations 
@@ -54,7 +56,11 @@ class RawScan():
     # Read segmenation mask 
     def readMask(self): 
         mask = sitk.ReadImage(fileName=self.maskPath)
-        self.mask = sitk.GetArrayFromImage(image=mask)
+        mask = sitk.GetArrayFromImage(image=mask)
+        
+        mask[mask > 0] = 255
+
+        self.mask = mask
 
     # Perform preprocessing operations on scan 
     def cleanScan(self): 
@@ -70,15 +76,15 @@ class RawScan():
             windowedScan = windowImage(img=scanSlice, window=600, level=-1200) 
 
             # Normalize pixels to be 0-256
-            normalizedPixelSlice = (windowedScan // 256).astype('uint8')
+            # normalizedPixelSlice = (windowedScan // 256).astype('uint8')
 
             # Apply mask to scan 
-            maskedScan = normalizedPixelSlice * maskSlice
+            #maskedScan = normalizedPixelSlice * maskSlice
 
-            maskHighVals = (maskedScan == 0)
+            maskHighVals = (maskSlice == 0)
 
             final = np.copy(scanSlice)
-            final[maskHighVals] = 0
+            final[maskHighVals] = -1500
 
             cleanScan.append(final) 
 

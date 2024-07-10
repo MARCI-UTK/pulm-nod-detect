@@ -6,9 +6,9 @@ from tqdm import tqdm
 
 from src.model.data import CropDataset
 from src.model.rpn_loss import RegLoss, ClsLoss, ValClsLoss
-from src.util.util import sample_anchor_boxes
+from src.util.util import sample_anchor_boxes, corners_2_xyzd
 
-from rpn import RPN
+from rpn import RPN, get_centers, get_anc_boxes
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -41,6 +41,12 @@ def main():
         batch_size=batch_size, 
         shuffle=True
     )
+
+    centers_list = get_centers(0, 0)
+
+    anc_box_list = get_anc_boxes(centers=centers_list)
+    anc_box_list = [corners_2_xyzd(x) for x in anc_box_list]
+    anc_box_list = torch.tensor(anc_box_list)
 
     model = RPN(128, 512, 3)
     model = torch.nn.DataParallel(model, device_ids=[0,1,2,3])
@@ -85,6 +91,9 @@ def main():
             for idx, data in enumerate(pbar):
                 fname, x, y, bb_y = data
 
+                # This is used for logging 
+                fname = list(fname)
+
                 # Make labels correct size 
                 y = y.unsqueeze(1)
 
@@ -120,6 +129,37 @@ def main():
 
                 train_acc += (t_tp + t_tn) / (t_tp + t_tn + t_fp + t_fn)
 
+                if e == 20: 
+                    out_file = open('model_output.txt', 'w')
+
+                    for i in range(len(pred_binary)): 
+                        out_file.write(f'sample: {fname[i]}\n')
+
+                        tp_idxs = ((pred_binary[i] == 1) & (y[i] == 1)).squeeze()
+                        fp_idxs = ((pred_binary[i] == 1) & (y[i] == 0)).squeeze()
+
+                        if len(tp_idxs) != 0: 
+                            bb_pred_out = pred_anch_locs[i][tp_idxs]
+                            bb_y_out = bb_y[i][tp_idxs]
+                            anc_boxes = anc_box_list[tp_idxs]
+
+                            out_file.write(f'true_positives:\n')
+                            out_file.write(f'   gt_anchor_loc: {bb_y_out.tolist()}\n')
+                            out_file.write(f'   pred_anchor_deltas: {bb_pred_out.tolist()}\n')
+                            out_file.write(f'   anchor_box_locs: {anc_boxes.tolist()}\n')
+
+                        if len(fp_idxs) != 0: 
+                            bb_pred_out = pred_anch_locs[i][fp_idxs]
+                            anc_boxes = anc_box_list[fp_idxs]
+
+                            out_file.write(f'fale_positives:\n')
+                            out_file.write(f'   pred_anchor_deltas: {bb_pred_out.tolist()}\n')
+                            out_file.write(f'   anchor_box_locs: {anc_boxes.tolist()}\n')
+
+                        out_file.write('\n')
+
+                    out_file.close()
+
                 pbar.set_postfix(loss=loss.item())
 
         model.eval()
@@ -150,8 +190,7 @@ def main():
                 v_fn += ((pred_binary == 0.) & (y == 1.)).sum().item()
 
                 val_acc += (v_tp + v_tn) / (v_tp + v_tn + v_fp + v_fn)
-
-
+                
         #scheduler.step()
 
         epoch_train_loss = train_loss / len(train_loader)
