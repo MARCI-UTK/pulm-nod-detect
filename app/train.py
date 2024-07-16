@@ -6,13 +6,59 @@ from tqdm import tqdm
 
 from src.model.data import CropDataset
 from src.model.rpn_loss import RegLoss, ClsLoss, ValClsLoss
-from src.util.util import sample_anchor_boxes, corners_2_xyzd
+from src.util.util import sample_anchor_boxes, corners_2_xyzd, apply_bb_deltas, nms
 
 from rpn import RPN, get_centers, get_anc_boxes
+
+#from clearml import Task
+#from torch.utils.tensorboard import SummaryWriter 
+
+#task = Task.init(project_name="Pulmonary Nodule Detection", task_name="Model Logging")
+#writer = SummaryWriter()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 dataPath = '/data/marci/dlewis37/luna16/'
+
+# Initialize all non-RPN layers
+def weight_init(m): 
+    if isinstance(m, torch.nn.Conv3d): 
+        torch.nn.init.xavier_uniform_(m.weight) 
+    elif isinstance(m, torch.nn.Linear): 
+        torch.nn.init.xavier_uniform_(m.weight)
+
+def write_epoch_cm(cm, epoch, file): 
+    file.write(f'epoch {epoch}. cm: {cm}\n')
+
+def write_epoch_vis_result(pred_binary, y, pred_locs, gt_anc_locs, anc_box_list, epoch, fname, out_file):
+
+    out_file.write(f'epoch: {epoch}\n')
+
+    for i in range(len(pred_binary)): 
+        out_file.write(f'sample: {fname[i]}\n')
+
+        tp_idxs = ((pred_binary[i] == 1) & (y[i] == 1)).squeeze()
+        fp_idxs = ((pred_binary[i] == 1) & (y[i] == 0)).squeeze()
+
+        if len(tp_idxs) != 0: 
+            bb_pred_out = pred_locs[i][tp_idxs]
+            bb_y_out = gt_anc_locs[i][tp_idxs]
+            anc_boxes = anc_box_list[tp_idxs]
+
+            out_file.write(f'true_positives:\n')
+            out_file.write(f'   gt_anchor_loc: {bb_y_out.tolist()}\n')
+            out_file.write(f'   pred_anchor_deltas: {bb_pred_out.tolist()}\n')
+            out_file.write(f'   anchor_box_locs: {anc_boxes.tolist()}\n')
+
+        if len(fp_idxs) != 0: 
+            bb_pred_out = pred_locs[i][fp_idxs]
+            anc_boxes = anc_box_list[fp_idxs]
+
+            out_file.write(f'false_positives:\n')
+            out_file.write(f'   pred_anchor_deltas: {bb_pred_out.tolist()[:32]}\n')
+            out_file.write(f'   anchor_box_locs: {anc_boxes.tolist()[:32]}\n')
+
+        out_file.write('\n')
 
 def main(): 
     img_paths = [os.path.join(dataPath, 'dataset', f) for f in os.listdir(os.path.join(dataPath, 'dataset'))]
@@ -29,13 +75,15 @@ def main():
     train_data = CropDataset(img_paths=train_img_paths, label_paths=train_label_paths)
     val_data   = CropDataset(img_paths=val_img_paths, label_paths=val_label_paths)
     batch_size = 32
- 
+    
+    # 708 positive samples in training set 
     train_loader = DataLoader(
         dataset=train_data,
         batch_size=batch_size, 
         shuffle=True
     )
 
+    # 159 positive samples in validation set 
     val_loader = DataLoader(
         dataset=val_data,
         batch_size=batch_size, 
@@ -49,11 +97,12 @@ def main():
     anc_box_list = torch.tensor(anc_box_list)
 
     model = RPN(128, 512, 3)
+    model.apply(weight_init)
     model = torch.nn.DataParallel(model, device_ids=[0,1,2,3])
     model.to(f'cuda:{model.device_ids[0]}')
 
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    #scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
 
     reg_loss_func = RegLoss()
     cls_loss_func = ClsLoss()
@@ -65,7 +114,10 @@ def main():
     train_accs = []
     val_accs = []
 
-    epochs = 25
+    out_file = open('model_data.txt', 'w')
+    cm_out_file = open('cm.txt', 'w')
+
+    epochs = 100
     for e in range(epochs): 
 
         train_loss = 0
@@ -114,58 +166,59 @@ def main():
 
                 loss.backward()
 
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
 
                 train_loss += loss.item()
                 avg_cls_loss += cls_loss
                 avg_reg_loss += bb_loss
 
-                pred_binary = torch.where(pred_cls_scores > 0.5, 1., 0.)
+                pred_binary = torch.where(pred_cls_scores > 0.7, 1., 0.)
 
                 t_tp += ((pred_binary == 1.) & (y == 1.)).sum().item()
                 t_tn += ((pred_binary == 0.) & (y == 0.)).sum().item()
                 t_fp += ((pred_binary == 1.) & (y == 0.)).sum().item()
                 t_fn += ((pred_binary == 0.) & (y == 1.)).sum().item()
 
-                train_acc += (t_tp + t_tn) / (t_tp + t_tn + t_fp + t_fn)
+                #write_epoch_vis_result(pred_binary, y, pred_anch_locs, bb_y, anc_box_list, e, fname, out_file)
 
-                if e == 20: 
-                    out_file = open('model_output.txt', 'w')
+                if e == 90: 
+                    pred_cls_scores = pred_cls_scores.squeeze()
+                    pred_cls_scores = torch.sigmoid(pred_cls_scores)
+                    y = y.squeeze()
 
-                    for i in range(len(pred_binary)): 
-                        out_file.write(f'sample: {fname[i]}\n')
+                    proposal_cls_scores  = torch.zeros(size=(pred_cls_scores.shape[0], 4000))
+                    proposal_labels      = torch.zeros(size=(pred_cls_scores.shape[0], 4000))
+                    proposal_pred_deltas = torch.zeros(size=(pred_cls_scores.shape[0], 4000, 4))
+                    proposal_gt_deltas   = torch.zeros(size=(pred_cls_scores.shape[0], 4000, 4))
+                    anc_boxs             = torch.zeros(size=(pred_cls_scores.shape[0], 4000, 4))
 
-                        tp_idxs = ((pred_binary[i] == 1) & (y[i] == 1)).squeeze()
-                        fp_idxs = ((pred_binary[i] == 1) & (y[i] == 0)).squeeze()
+                    for i in range(len(x)): 
+                        valid_idxs = (y[i] != -1)
+                        _, sorted_idxs = torch.sort(pred_cls_scores[i][valid_idxs], descending=True)
+                        idxs = sorted_idxs[:4000]
 
-                        if len(tp_idxs) != 0: 
-                            bb_pred_out = pred_anch_locs[i][tp_idxs]
-                            bb_y_out = bb_y[i][tp_idxs]
-                            anc_boxes = anc_box_list[tp_idxs]
+                        proposal_cls_scores[i] = pred_cls_scores[i][idxs]
+                        proposal_labels[i] = y[i][idxs]
+                        proposal_pred_deltas[i] = pred_anch_locs[i][idxs]
+                        proposal_gt_deltas[i] = bb_y[i][idxs]
+                        anc_boxs[i] = anc_box_list[idxs]
 
-                            out_file.write(f'true_positives:\n')
-                            out_file.write(f'   gt_anchor_loc: {bb_y_out.tolist()}\n')
-                            out_file.write(f'   pred_anchor_deltas: {bb_pred_out.tolist()}\n')
-                            out_file.write(f'   anchor_box_locs: {anc_boxes.tolist()}\n')
+                    final_idxs = nms(proposal_cls_scores, proposal_labels, proposal_pred_deltas, proposal_gt_deltas, anc_boxs)
 
-                        if len(fp_idxs) != 0: 
-                            bb_pred_out = pred_anch_locs[i][fp_idxs]
-                            anc_boxes = anc_box_list[fp_idxs]
+                    for i in range(len(proposal_cls_scores)): 
+                        print(len(final_idxs[i]))
 
-                            out_file.write(f'fale_positives:\n')
-                            out_file.write(f'   pred_anchor_deltas: {bb_pred_out.tolist()}\n')
-                            out_file.write(f'   anchor_box_locs: {anc_boxes.tolist()}\n')
+                pbar.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
 
-                        out_file.write('\n')
+                #writer.add_scalar('Training Loss', loss.item(), e * len(train_loader) + idx)
 
-                    out_file.close()
-
-                pbar.set_postfix(loss=loss.item())
+        write_epoch_cm(cm=[t_tp, t_tn, t_fp, t_fn], epoch=e, file=cm_out_file)
 
         model.eval()
         val_loss = 0
         with torch.no_grad():
-            for data in val_loader:
+            for idx, data in enumerate(val_loader):
                 fname, x, y, bb_y = data
 
                 y = y.unsqueeze(1)
@@ -182,16 +235,16 @@ def main():
                 loss = cls_loss + bb_loss 
                 val_loss += loss.item()
 
-                pred_binary = torch.where(pred_cls_scores > 0.5, 1., 0.)
+                #writer.add_scalar('Validation Loss', loss.item(), e * len(val_loader) + idx)
+
+                pred_binary = torch.where(pred_cls_scores > 0.7, 1., 0.)
 
                 v_tp += ((pred_binary == 1.) & (y == 1.)).sum().item()
                 v_tn += ((pred_binary == 0.) & (y == 0.)).sum().item()
                 v_fp += ((pred_binary == 1.) & (y == 0.)).sum().item()
                 v_fn += ((pred_binary == 0.) & (y == 1.)).sum().item()
-
-                val_acc += (v_tp + v_tn) / (v_tp + v_tn + v_fp + v_fn)
                 
-        #scheduler.step()
+        scheduler.step()
 
         epoch_train_loss = train_loss / len(train_loader)
         train_losses.append(epoch_train_loss)
@@ -199,24 +252,19 @@ def main():
         epoch_val_loss = val_loss / len(val_loader)
         val_losses.append(epoch_val_loss)
 
-        epoch_train_acc = train_acc / len(train_loader)
-        train_accs.append(epoch_train_acc)
+        print(f'finished epoch {e}. Train Loss: {epoch_train_loss}. Val Loss: {epoch_val_loss}.')
+        print(f'train [tp, tn, fp, fn]: [{t_tp}, {t_tn}, {t_fp}, {t_fn}]. val [tp, tn, fp, fn]: [{v_tp}, {v_tn}, {v_fp}, {v_fn}].')
 
-        epoch_val_acc = val_acc / len(val_loader)
-        val_accs.append(epoch_val_acc)
+    out_file.close()
+    cm_out_file.close()
 
-        print(f'finished epoch {e}. Train Loss: {epoch_train_loss}. Val Loss: {epoch_val_loss}. Train Acc.: {epoch_train_acc}. Val Acc.: {epoch_val_acc}')
-        print(f'train [tp, tn, fp, fn]: [{t_tp}, {t_tn}, {t_fp}, {t_fn}]')
-        print(f'val [tp, tn, fp, fn]: [{v_tp}, {v_tn}, {v_fp}, {v_fn}]')
-
-        #avg_reg_loss /= len(train_loader)
-        #avg_cls_loss /= len(train_loader) 
-        #print(f'avg cls loss: {avg_cls_loss}. avg reg loss: {avg_reg_loss}.')
-    
     print(f'train losses: {train_losses}.')
     print(f'val losses: {val_losses}.')
     print(f'train accs: {train_accs}.')
     print(f'val accs: {val_accs}.')
+
+    #writer.close()
+
     return 
 
 if __name__ == "__main__": 
