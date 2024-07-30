@@ -1,5 +1,6 @@
 from rpn import get_centers, get_anc_boxes
-from src.util.util import get_iou, xyzd_2_corners, corners_2_xyzd, scanPathToId
+from src.util.util import get_iou, xyzd_2_2corners, corners_2_xyzd, scanPathToId, xyzd_2_4corners
+from src.util.iou_3d import box3d_iou, get_3d_box
 
 import os
 import numpy as np 
@@ -34,7 +35,7 @@ def assign_pos_neg(corners, labels, gt_box):
     for idx, c in enumerate(xyzd_corners): 
         if labels[idx] == -1: 
             continue
-
+                    
         iou = get_iou(c, gt_box)
 
         if iou > 0.5: 
@@ -95,7 +96,7 @@ def assign_labels(paths):
                             labels=anchor_labels,
                             locs=final_locs)
         
-        print(f'wrote to {outpath}')  
+        print(f'wrote to {outpath}') 
 
     return 
 

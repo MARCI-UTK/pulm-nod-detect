@@ -1,7 +1,7 @@
 import numpy as np 
 import itertools
 import os
-from src.util.util import get_iou, xyzd_2_corners, corners_2_xyzd
+from src.util.util import get_iou, xyzd_2_2corners, corners_2_xyzd
 import matplotlib.pyplot as plt 
 from matplotlib.patches import Rectangle
 import torch.nn as nn 
@@ -24,6 +24,7 @@ class RPN(nn.Module):
         self.conv_reg = nn.Conv3d(in_channels=512, out_channels=n_anchor * 4, kernel_size=1, stride=1)
 
         # Initialize weights and biases as described in Faster-RCNN paper
+        """
         self.conv1.weight.data.normal_(0, 0.01)
         self.conv1.bias.data.zero_()
 
@@ -32,11 +33,13 @@ class RPN(nn.Module):
 
         self.conv_reg.weight.data.normal_(0, 0.01)
         self.conv_reg.bias.data.zero_()
+        """
         
     
     def forward(self, x): 
-        x = self.fe(x)
+        fm = self.fe(x)
 
+        x = fm
         x = self.conv1(x)
 
         pred_anc_locs = self.conv_reg(x)
@@ -48,7 +51,7 @@ class RPN(nn.Module):
         pred_cls_scores = pred_cls_scores.permute(0, 2, 3, 4, 1).contiguous()
         pred_cls_scores = pred_cls_scores.view(pred_cls_scores.shape[0], 1, 24 * 24 * 24 * 3) 
 
-        return pred_anc_locs, pred_cls_scores
+        return pred_anc_locs, pred_cls_scores, fm
 
 def get_centers(orig_width, feat_width): 
     # This array is 24 centers (one for each FM pixel) that map to the the 4x4 slice  
@@ -67,7 +70,7 @@ def get_anc_boxes(centers):
     for c in centers: 
         for s in box_sizes: 
             tmp = np.append(c, s)
-            corners = xyzd_2_corners(tmp)
+            corners = xyzd_2_2corners(tmp)
             anchor_boxes.append(corners)
 
     return anchor_boxes
