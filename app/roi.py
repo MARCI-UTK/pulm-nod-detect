@@ -51,27 +51,25 @@ class CropProposals(nn.Module):
 
         self.pool = nn.AdaptiveMaxPool3d(output_size=2)
 
-    def forward(self, fm, corners, scale): 
+    def forward(self, fm, corners): 
         rv = torch.zeros((len(fm), len(corners[0]), 128, 2, 2, 2))
     
         for i in range(len(fm)): 
             for j in range(len(corners[0])):
 
-                p1 = [int(corners[i][j][0][x] / scale) for x in range(3)]
+                p1 = [int(corners[i][j][0][x] / 4) for x in range(3)]
                 p1 = [p1[x] if p1[x] > 0 else 0 for x in range(3)]
                 p1 = [p1[x] if p1[x] < 21 else 21 for x in range(3)]
                 
-                p2 = [int(corners[i][j][1][x] / scale) for x in range(3)]
+                p2 = [int(corners[i][j][1][x] / 4) for x in range(3)]
                 p2 = [p2[x] if (p2[x] - p1[x]) >= 2 else p1[x] + 2 for x in range(3)]
 
                 x1, y1, z1 = p1
                 x2, y2, z2 = p2
 
-                #print(f'p1: {x1, y1, z1}. p2: {x2, y2, z2}')
-
                 proposal_fm = fm[i, :, x1:x2, y1:y2, z1:z2]
                 proposal_fm = self.pool(proposal_fm)
 
                 rv[i][j] = proposal_fm
-
+        
         return rv

@@ -4,7 +4,7 @@ import numpy as np
 import functools
 import itertools
 from torch.utils.data import DataLoader
-from src.model.data import CropDataset, ROIDataset
+from src.model.data import CropDataset
 
 def scanPathToId(path: str) -> str: 
     return path.split('/')[-1][0:-4]
@@ -109,7 +109,7 @@ def corners_2_xyzd(c):
     return xyz
 
 # targets.shape = [32, 1, 41472]
-def sample_anchor_boxes(pred, targets, device): 
+def sample_anchor_boxes(pred, targets): 
 
     # targets_batch.shape = [32, 41472]
     targets_batch = targets[:, 0, :]
@@ -278,37 +278,6 @@ def makeDataLoaders():
     train_data = CropDataset(img_paths=train_img_paths, label_paths=train_label_paths)
     val_data   = CropDataset(img_paths=val_img_paths, label_paths=val_label_paths)
     batch_size = 32
-    
-    # 708 positive samples in training set 
-    train_loader = DataLoader(
-        dataset=train_data,
-        batch_size=batch_size, 
-        shuffle=True
-    )
-
-    # 159 positive samples in validation set 
-    val_loader = DataLoader(
-        dataset=val_data,
-        batch_size=batch_size, 
-        shuffle=True
-    )
-
-    return train_loader, val_loader
-
-def makeROILoader(): 
-    dataPath = '/data/marci/dlewis37/luna16/'
-
-    paths = [os.path.join(dataPath, 'roi_labels', f) for f in os.listdir(os.path.join(dataPath, 'roi_labels'))]
-
-    train_img_idxs = int(len(paths) * 0.8)
-    train_img_paths = paths[:train_img_idxs - 1]
-    val_img_paths   = paths[train_img_idxs:]
-
-    train_label_idxs = int(len(paths) * 0.8)
-
-    train_data = ROIDataset(train_img_paths)
-    val_data   = ROIDataset(val_img_paths)
-    batch_size = 128
     
     # 708 positive samples in training set 
     train_loader = DataLoader(

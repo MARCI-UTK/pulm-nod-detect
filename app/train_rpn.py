@@ -10,15 +10,13 @@ from src.util.util import *
 from rpn import RPN, get_centers, get_anc_boxes
 from roi import ROI, CropProposals
 
+import matplotlib.pyplot as plt
 from torch.autograd import Variable
-
 import torch.nn.functional as F
+from clearml import Task, Logger
 
-#from clearml import Task
-#from torch.utils.tensorboard import SummaryWriter 
-
-#task = Task.init(project_name="Pulmonary Nodule Detection", task_name="Loss Logging (75e. Manual L2 regularization.)")
-#writer = SummaryWriter()
+task = Task.init(project_name="Pulmonary Nodule Detection", task_name="Nature Paper Loss Function (0.12 pos. threshold)")
+logger = task.get_logger()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 dataPath = '/data/marci/dlewis37/luna16/'
@@ -42,12 +40,14 @@ def main():
     rpn = torch.nn.DataParallel(rpn, device_ids=[0,1,2,3])
     rpn.to(f'cuda:{rpn.device_ids[0]}')
 
+    """
     roi = ROI()
     roi.apply(weight_init)
     roi = torch.nn.DataParallel(roi, device_ids=[0,1,2,3])
     roi.to(f'cuda:{roi.device_ids[0]}')
 
     proposal_fm_generator = CropProposals()
+    """
 
     # Create optimizer and LR scheduler 
     optimizer = optim.Adam(rpn.parameters(), lr=0.0001)
@@ -61,11 +61,7 @@ def main():
     train_losses = []   
     val_losses = []
 
-    cls_loss_norm = 0
-    reg_loss_norm = 0
-    rpn_loss_norm = 0
-
-    epochs = 30
+    epochs = 50
     for e in range(epochs): 
 
         train_loss = 0
@@ -90,68 +86,49 @@ def main():
                 optimizer.zero_grad()
 
                 pred_anch_locs, pred_cls_scores, fm = rpn(x)
-                update_cm(y, pred_cls_scores, rpn_cm) 
+                update_cm(y, pred_cls_scores, rpn_cm)
 
-                rpn_loss = rpn_cm[0] / sum(rpn_cm)
-                rpn_loss = 1 - rpn_loss
+                if e == 1: 
+                    fm = fm.detach().tolist()
+                    plt.imshow(fm[len(fm) // 2][len(fm[0]) // 2][12], cmap='gray') 
+                    plt.savefig('feature_map.png')
+                    plt.show()
                 
-                #sampled_pred, sampled_target = sample_anchor_boxes(pred_cls_scores, y, f'cuda:{rpn.device_ids[0]}')
-              
-                roi_y, roi_proposals, roi_gt_deltas, roi_anc_boxs = generate_roi_input(pred_anch_locs, 
-                                                                                        bb_y, 
-                                                                                        pred_cls_scores, 
-                                                                                        y, 
-                                                                                        anc_box_list) 
-                proposal_fms = proposal_fm_generator(fm, roi_proposals, 4)
-                proposal_fms = proposal_fms.to(f'cuda:{roi.device_ids[0]}')
-                proposal_fms = proposal_fms.view(-1, 128, 2, 2, 2)
+                sampled_pred, sampled_target = sample_anchor_boxes(pred_cls_scores, y) 
 
-                roi_y = roi_y.to(f'cuda:{roi.device_ids[0]}')
-                roi_y = roi_y.view(-1, 1)
+                pred_binary = torch.where(sampled_pred > 0.12, 1., 0.)
 
-                roi_gt_deltas = roi_gt_deltas.to(f'cuda:{roi.device_ids[0]}')
-                roi_gt_deltas = roi_gt_deltas.view(-1, 4)
+                cls_loss = cls_loss_func(pred_binary, sampled_target, 32)
+                reg_loss = reg_loss_func(y, pred_anch_locs, bb_y, 32)
 
-                cls, reg = roi(proposal_fms)
+                cls_loss.requires_grad = True
+                #reg_loss.requires_grad = True
 
-                if (roi_y == 1).sum() != 0: 
-                    pos_weight = (roi_y == 0.).sum() / (roi_y == 1.).sum()
-                else: 
-                    pos_weight = (roi_y == 0).sum()
-
-                cls_loss = F.binary_cross_entropy_with_logits(input=cls, target=roi_y, pos_weight=pos_weight)
-                reg_loss = F.smooth_l1_loss(input=reg, target=roi_gt_deltas, beta=1)
-
-                #print(cls_loss.item(), reg_loss.item(), rpn_loss)
-
-                if (e == 0) and (idx == 0): 
-                    cls_loss_norm = cls_loss.item()
-                    reg_loss_norm = reg_loss.item()
-
-                loss = (cls_loss / cls_loss_norm) + (reg_loss / reg_loss_norm) + rpn_loss
-                loss.to(f'cuda:{roi.device_ids[0]}')
+                loss = cls_loss + reg_loss
+                print(loss.requires_grad)
                 loss.backward()
-
-                if (e > 0) and (e % 5 == 0): 
-                    cls_loss_norm = cls_loss.item()
-                    reg_loss_norm = reg_loss.item()
-
-                # Clip gradients and update parameters  
-                torch.nn.utils.clip_grad_norm_(rpn.parameters(), 1.0)
-                torch.nn.utils.clip_grad_norm_(roi.parameters(), 1.0) 
-
-                optimizer.step()
 
                 train_loss += loss.item()
 
-                # Update confustion matrix for current epoch 
-                update_cm(roi_y, cls, roi_cm)
+                iteration = e * len(train_loader) + idx
+                logger.report_scalar(
+                    "Cls. vs. Reg. Loss", "Reg. Loss", iteration=iteration, value=reg_loss,
+                )
+                logger.report_scalar(
+                    "Cls. vs. Reg. Loss", "Cls. Loss", iteration=iteration, value=cls_loss,
+                )
+                logger.report_scalar(
+                    "Total Loss", "Total Loss", iteration=iteration, value=loss.item(),
+                )
 
+                # Clip gradients and update parameters  
+                torch.nn.utils.clip_grad_norm_(rpn.parameters(), 1.0)
+
+                optimizer.step() 
                 pbar.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
-
-                #writer.add_scalar('Training Loss', loss.item(), e * len(train_loader) + idx)
                 
-        scheduler.step()
+        if e > 25: 
+            scheduler.step()
 
         # Take average of losses using the number of batches
         epoch_train_loss = train_loss / len(train_loader)
@@ -159,7 +136,7 @@ def main():
 
         # Print epoch losses and confusion matrix statistics
         print(f'finished epoch {e}. Train Loss: {epoch_train_loss}.')
-        print(f'rpn [tp, tn, fp, fn]: [{rpn_cm[0]}, {rpn_cm[1]}, {rpn_cm[2]}, {rpn_cm[3]}]. roi [tp, tn, fp, fn]: [{roi_cm[0]}, {roi_cm[1]}, {roi_cm[2]}, {roi_cm[3]}].')
+        print(f'rpn [tp, tn, fp, fn]: [{rpn_cm[0]}, {rpn_cm[1]}, {rpn_cm[2]}, {rpn_cm[3]}].')
 
     print(f'train losses: {train_losses}.')
 

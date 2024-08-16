@@ -5,7 +5,6 @@ from .util import voxel_to_world
 
 import os 
 import glob
-import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -46,6 +45,7 @@ def generateCrops(dataPath: str):
             continue
  
         img = scan.img
+        img = (img - np.min(img)) / (np.max(img) - np.min(img)) 
         
         if len(scan.annotations) != 0: 
             for i in scan.annotations: 

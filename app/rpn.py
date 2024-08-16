@@ -24,6 +24,7 @@ class RPN(nn.Module):
         self.conv_reg = nn.Conv3d(in_channels=512, out_channels=n_anchor * 4, kernel_size=1, stride=1)
 
         # Initialize weights and biases as described in Faster-RCNN paper
+        
         """
         self.conv1.weight.data.normal_(0, 0.01)
         self.conv1.bias.data.zero_()
@@ -34,7 +35,6 @@ class RPN(nn.Module):
         self.conv_reg.weight.data.normal_(0, 0.01)
         self.conv_reg.bias.data.zero_()
         """
-        
     
     def forward(self, x): 
         fm = self.fe(x)
@@ -49,7 +49,7 @@ class RPN(nn.Module):
         pred_anc_locs = pred_anc_locs.view(pred_anc_locs.shape[0], 24 * 24 * 24 * 3, 4)
 
         pred_cls_scores = pred_cls_scores.permute(0, 2, 3, 4, 1).contiguous()
-        pred_cls_scores = pred_cls_scores.view(pred_cls_scores.shape[0], 1, 24 * 24 * 24 * 3) 
+        pred_cls_scores = pred_cls_scores.view(pred_cls_scores.shape[0], 1, 24 * 24 * 24 * 3)
 
         return pred_anc_locs, pred_cls_scores, fm
 

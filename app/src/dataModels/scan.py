@@ -144,7 +144,7 @@ class CleanScan():
 
         nodule_locations = []
         for _, row in scan_annotations.iterrows(): 
-            loc = (row['coordX'], row['coordY'], row['coordZ'], row['diameter_mm'])
+            loc = [row['coordX'], row['coordY'], row['coordZ'], row['diameter_mm']]
             nodule_locations.append(loc)
         
         self.annotations = nodule_locations
