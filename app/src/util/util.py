@@ -5,6 +5,7 @@ import functools
 import itertools
 from torch.utils.data import DataLoader
 from src.model.data import CropDataset
+from itertools import chain, combinations
 
 def scanPathToId(path: str) -> str: 
     return path.split('/')[-1][0:-4]
@@ -68,34 +69,11 @@ def xyzd_2_2corners(c):
     r = d / 2
 
     center = [x, y, z]
-    corner_1 = [i - r for i in center]
-    corner_2 = [i + r for i in center]
 
     c_1 = [x - r, y - r, z - r]
     c_2 = [x + r, y + r, z + r]
 
     return [c_1, c_2]
-
-# Need this to use iou3d function
-def xyzd_2_4corners(c): 
-    x, y, z, d = c 
-    r = d // 2
-
-    center = [x, y, z]
-    
-    c0 = [x - r, y - r, z + r]
-    c1 = [x + r, y - r, z + r]
-    c2 = [x + r, y + r, z + r]
-    c3 = [x - r, y + r, z + r]
-
-    c4 = [x - r, y - r, z - r]
-    c5 = [x + r, y - r, z - r]
-    c6 = [x + r, y + r, z - r]
-    c7 = [x - r, y + r, z - r]
-    
-    rv = np.array([c0, c1, c2, c3, c4, c5, c6, c7])
-    return rv
-
 
 def corners_2_xyzd(c): 
     c1 = c[0]
@@ -166,41 +144,105 @@ def apply_bb_deltas(anc_box, deltas):
           anc_box[2] + deltas[2], 
           anc_box[3] * np.exp(deltas[3])] 
     """
-
+    
     rv = [anc_box[i] + (anc_box[3] * deltas[i]) for i in range(3)]
     rv.append(anc_box[3] * np.exp(deltas[3]))
 
     return rv
 
-def nms(pred_y, y, pred_bb, gt_bb, anc_boxs): 
-    keep_final = []
+"""
+args: 
+    - list of anchor box locations 
+    - the suggested deltas output by regression head of RPN 
 
-    for i in range(len(y)): 
-        if pred_y[i][0] < 0.5: 
-            keep_final.append([])
-            continue 
+returns: 
+    - an array of [batch_size, num_anchor_boxes, 2, 3]
+    - the last 2 dimensions come from having 2 corners with 3 coordinates each 
+"""
+def make_corners(anc_boxes, pred_deltas): 
+    corners = torch.zeros(pred_deltas.shape[0], pred_deltas.shape[1], 2, 3)
 
-        keep = [0]
+    cpu_pred_deltas = pred_deltas.tolist()
 
-        best_deltas = pred_bb[i][0]
-        best_anc_box = anc_boxs[i][0]
+    # Loop through all crops in mini-batch  
+    for i in range(len(pred_deltas)):
+        # Loop through every anchor box in crop[i]
+        for j in range(len(pred_deltas[0])): 
+            # Apply suggested deltas to anchor box 
+            tmp = apply_bb_deltas(anc_boxes[j], cpu_pred_deltas[i][j])
 
-        best_bb = apply_bb_deltas(best_anc_box.detach().tolist(), best_deltas.detach().tolist())
+            # Convert this to 2 corner format
+            tmp = xyzd_2_2corners(tmp)
+
+            # Put the 2 corners into a tensor and put back on GPU
+            tmp = torch.tensor(tmp).cuda()
+
+            # Put the 2 corners in the correct spot in mini-batch/crop 
+            corners[i][j] = tmp
+
+    return corners
+
+def nms(pred_y, y, boxes): 
+    pred_y = pred_y.squeeze()
+    y = y.squeeze()
+
+    for i in range(len(pred_y)): 
+        #print(f'before: {(pred_y[i] != -1).sum()}')
+        tmp_pred_y = pred_y[i]
+        tmp_b = boxes[i]
+        tmp_y = y[i]
+
+        best_score = torch.argmax(tmp_pred_y)
+        best_b = tmp_b[best_score, :]
+
+        for j in range(len(tmp_b)): 
+            if j == best_score: 
+                continue 
+            
+            best_xyzd = corners_2_xyzd(best_b.tolist())
+            test_xyzd = corners_2_xyzd(tmp_b[j].tolist())
+
+            iou = get_iou(best_xyzd, test_xyzd)
+
+            if iou > 0.1: 
+                tmp_y[j] = -1.
+                tmp_pred_y[j] = -1
+                tmp_b[j] = torch.tensor([[-1., -1., -1.], [-1., -1., -1.]])
         
-        for j in range(1, len(y[i])): 
-            anc_box = anc_boxs[i][j]
-            deltas = pred_bb[i][j]
+    
+        pred_y[i] = tmp_pred_y
+        boxes[i]  = tmp_b
+        y[i] = tmp_y
 
-            bb = apply_bb_deltas(anc_box.detach().tolist(), deltas.detach().tolist())
+        #print(f'after: {(pred_y[i] != -1).sum()}') 
+    
+    return pred_y, y, boxes
+    
+def threshold_proposals(pred_deltas, gt_deltas, cls_scores, targets, corners):
+    cls_scores = cls_scores.squeeze()
+    targets    = targets.squeeze()
 
-            iou = get_iou(best_bb, bb)
+    mask = ((targets != -1) & (cls_scores > 0.12))
+    
+    idxs = torch.masked_fill(torch.cumsum(mask.int(), dim=1), ~mask, 0)
+    
+    cls_scores = torch.scatter(input=torch.full_like(cls_scores, -1), dim=1, index=idxs, src=cls_scores)
+    targets    = torch.scatter(input=torch.full_like(targets, -1), dim=1, index=idxs, src=targets)
 
-            if iou < 0.7:
-                keep.append(j)
+    box_idxs = idxs[:, :, None].expand(pred_deltas.size(0), -1, pred_deltas.size(-1))
 
-        keep_final.append(keep)
+    pred_deltas = torch.scatter(input=torch.full_like(pred_deltas, -1), dim=1, index=box_idxs, src=pred_deltas)
+    gt_deltas   = torch.scatter(input=torch.full_like(gt_deltas, -1), dim=1, index=box_idxs, src=gt_deltas)
 
-    return keep_final
+    corner_idxs = idxs[:, :, None, None].expand(corners.size(0), -1, corners.size(-2), corners.size(-1)) 
+    corners     = torch.scatter(input=torch.full_like(corners, -1), dim=1, index=corner_idxs, src=corners) 
+
+    cls_scores = cls_scores.unsqueeze(1)
+    targets    = targets.unsqueeze(1)
+
+    #print(cls_scores.shape, targets.shape, pred_deltas.shape, gt_deltas.shape, corners.shape)
+
+    return cls_scores, targets, pred_deltas, gt_deltas, corners
 
 def generate_roi_input(pred_deltas, gt_deltas, cls_scores, y, anc_box_list):  
     roi_cls_scores = []
@@ -223,7 +265,6 @@ def generate_roi_input(pred_deltas, gt_deltas, cls_scores, y, anc_box_list):
         tmp_gt_deltas = gt_deltas[i][valid_idxs]
 
         _, sorted_idxs = torch.sort(tmp_cls_scores, descending=True)
-        sorted_idxs = sorted_idxs[:200]
 
         tmp_anc_boxs = tmp_anc_boxs[sorted_idxs]
         tmp_pred_deltas = tmp_gt_deltas[sorted_idxs]
@@ -240,12 +281,11 @@ def generate_roi_input(pred_deltas, gt_deltas, cls_scores, y, anc_box_list):
         roi_cls_scores.append(tmp_cls_scores[sorted_idxs])
         roi_y.append(tmp_y[sorted_idxs])
     
-    roi_anc_boxs  = torch.stack(roi_anc_boxs)
     roi_gt_deltas = torch.stack(roi_gt_deltas)
     roi_cls_scores = torch.stack(roi_cls_scores)
     roi_y = torch.stack(roi_y)
 
-    return roi_y, roi_corners, roi_gt_deltas, roi_anc_boxs
+    return roi_y, roi_corners, roi_gt_deltas
 
 def weight_init(m): 
     if isinstance(m, torch.nn.Conv3d): 
@@ -254,7 +294,7 @@ def weight_init(m):
         torch.nn.init.xavier_uniform_(m.weight)
 
 def update_cm(y, pred, cm): 
-    pred_binary = torch.where(pred > 0.7, 1., 0.)
+    pred_binary = torch.where(pred > 0.5, 1., 0.)
 
     cm[0] += ((pred_binary == 1.) & (y == 1.)).sum().item()
     cm[1] += ((pred_binary == 0.) & (y == 0.)).sum().item()
@@ -294,3 +334,8 @@ def makeDataLoaders():
     )
 
     return train_loader, val_loader
+
+def powerset(iterable):
+    "list(powerset([1,2,3])) --> [(), (1,), (2,), (3,), (1,2), (1,3), (2,3), (1,2,3)]"
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
