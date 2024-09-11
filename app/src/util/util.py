@@ -150,6 +150,18 @@ def apply_bb_deltas(anc_box, deltas):
 
     return rv
 
+def deltas_2_corners(anc_box, deltas): 
+    rv = [anc_box[i] + (anc_box[3] * deltas[i]) for i in range(3)]
+    rv.append(anc_box[3] * torch.exp(deltas[3]))
+
+    x, y, z, d = rv 
+    r = d / 2
+
+    c_1 = [x - r, y - r, z - r]
+    c_2 = [x + r, y + r, z + r]
+
+    return [c_1, c_2]
+
 """
 args: 
     - list of anchor box locations 
@@ -160,25 +172,14 @@ returns:
     - the last 2 dimensions come from having 2 corners with 3 coordinates each 
 """
 def make_corners(anc_boxes, pred_deltas): 
-    corners = torch.zeros(pred_deltas.shape[0], pred_deltas.shape[1], 2, 3)
-
-    cpu_pred_deltas = pred_deltas.tolist()
+    corners = torch.zeros(pred_deltas.shape[0], pred_deltas.shape[1], 2, 3).cuda()
 
     # Loop through all crops in mini-batch  
     for i in range(len(pred_deltas)):
-        # Loop through every anchor box in crop[i]
-        for j in range(len(pred_deltas[0])): 
-            # Apply suggested deltas to anchor box 
-            tmp = apply_bb_deltas(anc_boxes[j], cpu_pred_deltas[i][j])
+        tmp = [deltas_2_corners(anc_boxes[x], pred_deltas[i][x]) for x in range(len(pred_deltas[i]))]
+        corners[i] = torch.tensor(tmp)
 
-            # Convert this to 2 corner format
-            tmp = xyzd_2_2corners(tmp)
-
-            # Put the 2 corners into a tensor and put back on GPU
-            tmp = torch.tensor(tmp).cuda()
-
-            # Put the 2 corners in the correct spot in mini-batch/crop 
-            corners[i][j] = tmp
+    print(corners.shape)
 
     return corners
 
@@ -198,18 +199,14 @@ def nms(pred_y, y, boxes):
         for j in range(len(tmp_b)): 
             if j == best_score: 
                 continue 
-            
-            best_xyzd = corners_2_xyzd(best_b.tolist())
-            test_xyzd = corners_2_xyzd(tmp_b[j].tolist())
-
-            iou = get_iou(best_xyzd, test_xyzd)
+        
+            iou = get_iou(best_b, tmp_b[j])
 
             if iou > 0.1: 
                 tmp_y[j] = -1.
                 tmp_pred_y[j] = -1
                 tmp_b[j] = torch.tensor([[-1., -1., -1.], [-1., -1., -1.]])
         
-    
         pred_y[i] = tmp_pred_y
         boxes[i]  = tmp_b
         y[i] = tmp_y

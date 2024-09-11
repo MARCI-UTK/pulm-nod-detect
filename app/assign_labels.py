@@ -1,5 +1,5 @@
 from rpn import get_centers, get_anc_boxes
-from src.util.util import get_iou, xyzd_2_2corners, corners_2_xyzd, scanPathToId, xyzd_2_4corners
+from src.util.util import get_iou, xyzd_2_2corners, corners_2_xyzd, scanPathToId
 from src.util.iou_3d import box3d_iou, get_3d_box
 
 import os

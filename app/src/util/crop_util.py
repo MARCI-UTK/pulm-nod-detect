@@ -81,29 +81,10 @@ def generateCrops(dataPath: str):
                 print(f'wrote to {outpath}')
 
                 pos += 1
-                total_crops += 1
-
-                """
-                x = nodule_loc[0] - nodule_voxel_location[3] // 2
-                y = nodule_loc[1] - nodule_voxel_location[3] // 2
-                w = nodule_voxel_location[3]
-                h = nodule_voxel_location[3]
-
-                rect = Rectangle(xy=(x, y), width=w, height=h, fill=False, color='r')
-
-                crop = img[origin[2]:origin[2] + 96, origin[1]:origin[1] + 96, origin[0]:origin[0] + 96]
-
-                plt.imshow(crop[nodule_loc[2]], cmap='gray')
-                plt.gca().add_patch(rect)
-                plt.savefig('crop.png')
-                """
+                total_crops += 1 
 
         else: 
-            randX = np.random.randint(0, img.shape[2] - 96)
-            randY = np.random.randint(0, img.shape[1] - 96)
-            randZ = np.random.randint(0, img.shape[0] - 96)
-
-            crop = img[randZ:randZ + 96, randY:randY + 96, randX:randX + 96]
+            crop = get_neg_crop(img)
 
             outpath = os.path.join(dataPath, 'dataset', f'{scan.scanId}_{str(total_crops)}.npz')
             np.savez_compressed(file=outpath,

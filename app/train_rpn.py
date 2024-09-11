@@ -3,19 +3,23 @@ import torch
 import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
 
-from src.model.rpn_loss import RegLoss, ClsLoss, ValClsLoss
+from src.model.rpn_loss import RegLoss, ClsLoss, ValClsLoss, NatureClsLoss
 from src.util.util import *
 
 from rpn import RPN, get_centers, get_anc_boxes
 from roi import ROI, CropProposals
+from src.model.feature_extractor import FeatureExtractor
 
 import matplotlib.pyplot as plt
 from torch.autograd import Variable
 import torch.nn.functional as F
 from clearml import Task, Logger
 
-task = Task.init(project_name="Pulmonary Nodule Detection", task_name="Nature Paper Loss Function (0.12 pos. threshold)")
+from sklearn.metrics import roc_curve
+
+task = Task.init(project_name="Pulmonary Nodule Detection", task_name="RPN Big Augmented Data + Momentum + L2 (0.0001) + LR Scheduler (init = 0.01) + Hopfield")
 logger = task.get_logger()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -24,7 +28,7 @@ batch_size = 32
     
 def main(): 
     # This function needs to be better (take parameters)
-    train_loader, val_loader = makeDataLoaders() 
+    train_loader, val_loader = makeDataLoaders()  
 
     # Get centers for anchor boxes
     centers_list = get_centers(0, 0)
@@ -35,39 +39,36 @@ def main():
     anc_box_list = torch.tensor(anc_box_list)
 
     # Initialize model 
+    # CHANGE DEV IDS BACK TO INCLUDE 0!!!
+
+    fe = FeatureExtractor()
+    fe.apply(weight_init)
+    fe = torch.nn.DataParallel(fe, device_ids=[1,2,3])
+    fe.to(f'cuda:{fe.device_ids[0]}')
+
     rpn = RPN(128, 512, 3)
-    rpn.apply(weight_init)
-    rpn = torch.nn.DataParallel(rpn, device_ids=[0,1,2,3])
+    rpn = torch.nn.DataParallel(rpn, device_ids=[1,2,3])
     rpn.to(f'cuda:{rpn.device_ids[0]}')
 
-    """
-    roi = ROI()
-    roi.apply(weight_init)
-    roi = torch.nn.DataParallel(roi, device_ids=[0,1,2,3])
-    roi.to(f'cuda:{roi.device_ids[0]}')
-
-    proposal_fm_generator = CropProposals()
-    """
-
     # Create optimizer and LR scheduler 
-    optimizer = optim.Adam(rpn.parameters(), lr=0.0001)
-    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
+    optimizer = optim.SGD(list(fe.parameters()) + list(rpn.parameters()), lr=0.01, momentum=0.9, weight_decay=0.0005)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1)
 
     # Define loss functions 
     reg_loss_func = RegLoss()
     cls_loss_func = ClsLoss()
-    val_cls_loss_func = ValClsLoss()
 
     train_losses = []   
-    val_losses = []
-
-    epochs = 50
+    
+    epochs = 100
     for e in range(epochs): 
 
         train_loss = 0
-        rpn_cm = [0, 0, 0, 0]
-        roi_cm = [0, 0, 0, 0]
+        val_loss = 0
+        train_cm = [0, 0, 0, 0]
+        val_cm   = [0, 0, 0, 0]
         
+        fe.train()
         rpn.train()
         with tqdm(train_loader) as pbar:
             for idx, data in enumerate(pbar):
@@ -79,68 +80,101 @@ def main():
                 # Make labels correct size 
                 y = y.unsqueeze(1)
 
-                x = x.to(f'cuda:{rpn.device_ids[0]}')
+                x = x.to(f'cuda:{fe.device_ids[0]}')
+
                 y = y.to(f'cuda:{rpn.device_ids[0]}')
                 bb_y = bb_y.to(f'cuda:{rpn.device_ids[0]}')
                             
                 optimizer.zero_grad()
 
-                pred_anch_locs, pred_cls_scores, fm = rpn(x)
-                update_cm(y, pred_cls_scores, rpn_cm)
+                fm = fe(x)
+                pred_anch_locs, pred_cls_scores = rpn(fm)
 
-                if e == 1: 
-                    fm = fm.detach().tolist()
-                    plt.imshow(fm[len(fm) // 2][len(fm[0]) // 2][12], cmap='gray') 
-                    plt.savefig('feature_map.png')
-                    plt.show()
+                update_cm(y, pred_cls_scores, train_cm)
                 
                 sampled_pred, sampled_target = sample_anchor_boxes(pred_cls_scores, y) 
 
-                pred_binary = torch.where(sampled_pred > 0.12, 1., 0.)
-
-                cls_loss = cls_loss_func(pred_binary, sampled_target, 32)
-                reg_loss = reg_loss_func(y, pred_anch_locs, bb_y, 32)
-
-                cls_loss.requires_grad = True
-                #reg_loss.requires_grad = True
+                cls_loss = cls_loss_func(sampled_pred, sampled_target)
+                reg_loss = reg_loss_func(y, pred_anch_locs, bb_y)
 
                 loss = cls_loss + reg_loss
-                print(loss.requires_grad)
                 loss.backward()
 
                 train_loss += loss.item()
 
-                iteration = e * len(train_loader) + idx
-                logger.report_scalar(
-                    "Cls. vs. Reg. Loss", "Reg. Loss", iteration=iteration, value=reg_loss,
-                )
-                logger.report_scalar(
-                    "Cls. vs. Reg. Loss", "Cls. Loss", iteration=iteration, value=cls_loss,
-                )
-                logger.report_scalar(
-                    "Total Loss", "Total Loss", iteration=iteration, value=loss.item(),
-                )
-
                 # Clip gradients and update parameters  
+                torch.nn.utils.clip_grad_norm_(fe.parameters(), 1.0)
                 torch.nn.utils.clip_grad_norm_(rpn.parameters(), 1.0)
-
                 optimizer.step() 
+
                 pbar.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
-                
-        if e > 25: 
-            scheduler.step()
+            
+        fe.eval()
+        rpn.eval()
+        for idx, data in enumerate(val_loader):
+                fname, x, y, bb_y = data
+
+                # This is used for logging 
+                fname = list(fname)
+
+                # Make labels correct size 
+                y = y.unsqueeze(1)
+
+                x = x.to(f'cuda:{fe.device_ids[0]}')
+                y = y.to(f'cuda:{rpn.device_ids[0]}')
+                bb_y = bb_y.to(f'cuda:{rpn.device_ids[0]}')
+                            
+                fm = fe(x)
+                pred_anch_locs, pred_cls_scores = rpn(fm)
+
+                update_cm(y, pred_cls_scores, val_cm)
+
+                sampled_pred, sampled_target = sample_anchor_boxes(pred_cls_scores, y) 
+
+                cls_loss = cls_loss_func(sampled_pred, sampled_target)
+                reg_loss = reg_loss_func(y, pred_anch_locs, bb_y)
+
+                loss = cls_loss + reg_loss
+
+                val_loss += loss.item()
 
         # Take average of losses using the number of batches
         epoch_train_loss = train_loss / len(train_loader)
-        train_losses.append(epoch_train_loss)
+        epoch_val_loss = val_loss / len(val_loader)
+
+        train_acc = (train_cm[0] + train_cm[1]) / sum(train_cm)
+        val_acc = (val_cm[0] + val_cm[1]) / sum(val_cm)
+
+        train_sens = (train_cm[0] / (train_cm[0] + train_cm[3]))
+        val_sens = (val_cm[0] / (val_cm[0] + val_cm[3]))
+
+
+        logger.report_scalar(
+            "Epoch Total Loss", "Train Loss", iteration=e, value=epoch_train_loss
+        )
+        logger.report_scalar(
+            "Epoch Total Loss", "Val. Loss", iteration=e, value=epoch_val_loss
+        )
+        logger.report_scalar(
+            "Epoch Accuracy", "Train Acc.", iteration=e, value=train_acc
+        )
+        logger.report_scalar(
+            "Epoch Accuracy", "Val. Acc.", iteration=e, value=val_acc
+        )
+        logger.report_scalar(
+            "Epoch Sensitivity", "Train Sens.", iteration=e, value=train_sens
+        )
+        logger.report_scalar(
+            "Epoch Sensitivity", "Val. Sens.", iteration=e, value=val_sens
+        )
 
         # Print epoch losses and confusion matrix statistics
-        print(f'finished epoch {e}. Train Loss: {epoch_train_loss}.')
-        print(f'rpn [tp, tn, fp, fn]: [{rpn_cm[0]}, {rpn_cm[1]}, {rpn_cm[2]}, {rpn_cm[3]}].')
+        print(f'finished epoch {e}. Train Loss: {epoch_train_loss}. Val Loss: {epoch_val_loss}')
+        print(f'Train Acc.: {train_acc}. Val Acc.: {val_acc}') 
+        print(f'train [tp, tn, fp, fn]: [{train_cm[0]}, {train_cm[1]}, {train_cm[2]}, {train_cm[3]}].')
+        print(f'val   [tp, tn, fp, fn]: [{val_cm[0]}, {val_cm[1]}, {val_cm[2]}, {val_cm[3]}].')
 
-    print(f'train losses: {train_losses}.')
-
-    #writer.close()
+        scheduler.step()
 
     return 
 

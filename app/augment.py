@@ -2,14 +2,20 @@ import os
 import glob
 import json 
 import torch
+import random 
+import itertools
+from tqdm import tqdm
 import numpy as np 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from scipy.ndimage import zoom
 import torch.nn.functional
 
-import monai
-
 from src.dataModels.scan import CleanScan
+from src.util.util import powerset
+from src.util.crop_util import get_neg_crop
+
+np.random.seed(27)
 
 data_path = '/data/marci/dlewis37/luna16'
 scan_paths = os.path.join(data_path, 'processed_scan', '*.npy')
@@ -67,9 +73,10 @@ def plot_scan(img, lbl, save=False):
         plt.show()
         plt.cla()
 
-def flip(img, lbl, axis): 
-    #flipper = monai.transforms.Flip(spatial_axis=axis)
-    #rv = flipper(img)
+def flip(img, lbl): 
+    axis = np.random.random()
+    axis = 1 if axis < 0.5 else 2
+
     rv = np.flip(img, axis=axis)
 
     """
@@ -81,33 +88,55 @@ def flip(img, lbl, axis):
     lbl_axis = 2 - axis
 
     new_lbl = np.copy(lbl)
-    new_lbl[0][lbl_axis] = img.shape[axis] - lbl[0][lbl_axis] - 1
+    new_lbl[lbl_axis] = img.shape[axis] - lbl[lbl_axis] - 1
 
     return rv, new_lbl
 
-def scale(img, lbl, factor): 
-    zoomer = monai.transforms.Zoom(zoom=factor, padding_mode='empty')
-    rv = zoomer(img)
+def scale(img, lbl): 
+    if np.random.random() < 0.5: 
+        factor = np.random.uniform(0.75, 0.85)
+    else: 
+        factor = np.random.uniform(1.15, 1.25)
 
-    pcts = [x / 96 for x in lbl]
-    new_lbl = [p * (96 * factor) for p in pcts]
+    orig_z, orig_y, orig_x = img.shape
 
-    return rv, new_lbl
+    new_img = zoom(img, (1, factor, factor))
 
-def add_noise(img): 
-    noise = np.random.normal(0, 0.01, size=img.shape)
+    x_scale = new_img.shape[2] / orig_x
+    y_scale = new_img.shape[1] / orig_y
+    z_scale = new_img.shape[0] / orig_z
+
+    scales = [x_scale, y_scale, z_scale]
+
+    new_lbl = [lbl[i] * scales[i] for i in range(3)]
+    new_lbl.append(lbl[3] * factor) 
+
+    return new_img, new_lbl
+
+def add_noise(img, lbl): 
+    dark_mask = (img == 0)
+    light_mask = (img == 1)
+
+    noise = np.random.normal(0, 0.05, size=img.shape)
     rv = img + noise
 
-    return rv 
+    # Restore black outer area and cap values at 1
+    rv[dark_mask] = 0
+    rv[light_mask] = 1
+
+    return rv, lbl
+
+def check_invalid_nod(img, lbl):
+    if lbl[0] < 48 or lbl[1] < 48 or lbl[2] < 48: 
+        return True
+    elif lbl[0] > img.shape[2] - 48 or lbl[1] > img.shape[1] - 48 or lbl[2] > img.shape[0] - 48: 
+        return True
+
+    return False
 
 def shift_crop(img, nod_loc, s_bound): 
     check = True
     center = []
-
-    if nod_loc[0] < 48 or nod_loc[1] < 48 or nod_loc[2] < 48: 
-        return None
-    elif nod_loc[0] > img.shape[2] - 48 or nod_loc[1] > img.shape[1] - 48 or nod_loc[2] > img.shape[0] - 48: 
-        return None
 
     while check: 
         if s_bound != 0: 
@@ -140,73 +169,234 @@ def shift_crop(img, nod_loc, s_bound):
 
 # 1185 total nodules (multiple per scan) !!
 
-for s in scans: 
-    scan = CleanScan(s)
-    
-    img = scan.img
-    lbl = scan.annotations
-
-    img = (img - np.min(img)) / (np.max(img) - np.min(img)) 
-
-    if len(lbl) != 0: 
-        lbl = [world_to_vox(x, scan.origin, scan.spacing) for x in lbl] 
-
-        img = add_noise(img)
-        img, lbl = flip(img, lbl, 1)
-
-        crop_rv = shift_crop(img, lbl[0], 25)
-
-        if crop_rv == None: 
-            continue
-
-        crop, c_lbl = crop_rv
-
-        plt.imshow(crop[int(c_lbl[2])], cmap=plt.bone())
-        plt.gca().add_patch(make_plt_rect(c_lbl, 'r'))
-        plt.title("Augmented Crop")
-        plt.savefig('augmented_crop.png')
-        plt.show()
-        plt.cla()
-
-        """
-        scaled, s_lbl = scale(crop, c_lbl, 0.75)
-
-        plt.imshow(scaled[int(s_lbl[2])], cmap=plt.bone())
-        rect = make_plt_rect(s_lbl, 'r')
-        plt.gca().add_patch(rect)
-        plt.title('% technique')
-        plt.show()
-        plt.cla()
-        """
-
-        """
-        fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, sharey=True, sharex=True, figsize=(18, 9))
-
-        ax1.imshow(img[int(lbl[0][2])], cmap=plt.bone())
-        ax1.set_title("Original")
-        ax1.add_patch(make_plt_rect(lbl[0], 'r'))
-
-        ax2.imshow(noisy[int(lbl[0][2])], cmap=plt.bone())
-        ax2.set_title("Noise")
-        ax2.add_patch(make_plt_rect(lbl[0], 'r'))
-
-        ax3.imshow(flipped[int(f_lbl[0][2])], cmap=plt.bone())
-        ax3.set_title("Flip")
-        ax3.add_patch(make_plt_rect(f_lbl[0], 'r'))
-
-        plt.show()
-        plt.cla()
-        """
-
-        out_path = f'imgs/{scan.scanId}.png'
-        #plot_scan(img, lbl, save=out_path)
-
 """
-fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True, sharex=True, figsize=(12, 6))
-ax1.imshow(img[img.shape[0] // 2], cmap=plt.bone())
-ax1.set_title("Original")
-ax2.imshow(zoomed[zoomed.shape[0] // 2], cmap=plt.bone())
-ax2.set_title("Zoomed")
-plt.show()
-plt.cla()
+ops = [0, 1, 2]
+ops = list(powerset(ops))
+ops = [list(x) for x in ops]
 """
+
+count = 0
+with tqdm(scans) as pbar: 
+    for s in pbar: 
+
+        ops = [0, 1, 2]
+        ops = list(powerset(ops))
+        ops = [list(x) for x in ops]
+
+        scan = CleanScan(s)
+        
+        img = scan.img
+        lbl = scan.annotations
+
+        img = (img - np.min(img)) / (np.max(img) - np.min(img)) 
+
+        if len(lbl) != 0: 
+            lbl = [world_to_vox(x, scan.origin, scan.spacing) for x in lbl]
+
+            for l in lbl: 
+
+                invalid = check_invalid_nod(img, l)
+
+                if invalid: 
+                    continue
+
+                aug_imgs = []
+                aug_lbls = []
+
+                keep = np.random.permutation(len(ops))
+                ops = [ops[i] for i in keep]
+                
+                for op_set in ops: 
+                    aug_i, aug_l = img, l
+
+                    if len(op_set) == 0:
+                        aug_i, aug_l = shift_crop(aug_i, aug_l, 24)
+
+                        aug_imgs.append(aug_i)
+                        aug_lbls.append(aug_l)
+
+                        continue
+
+                    for op in op_set: 
+
+                        if op == 0: 
+                            aug_i, aug_l = add_noise(aug_i, aug_l)
+                        if op == 1: 
+                            aug_i, aug_l = flip(aug_i, aug_l)
+                        if op == 2: 
+                            aug_i, aug_l = scale(aug_i, aug_l)
+
+                    aug_i, aug_l = shift_crop(aug_i, aug_l, 24)
+                        
+                    aug_imgs.append(aug_i)
+                    aug_lbls.append(aug_l)
+
+                for i in range(len(aug_imgs)): 
+                    print(f'crop shape: {aug_imgs[i].shape}')
+
+                    outpath = os.path.join(data_path, 'dataset', f'{scan.scanId}_{str(count)}.npz')
+                    np.savez_compressed(file=outpath,
+                                        img=[aug_imgs[i],],
+                                        label=1, 
+                                        bbox=aug_lbls[i],)
+
+                    count += 1
+
+        else: 
+            l = [0, 0, 0, 0]
+
+            keep = np.random.permutation(len(ops))
+            ops = [ops[i] for i in keep]
+            ops = ops[0]
+
+            aug_i = img
+
+            for op in ops: 
+
+                if op == 0: 
+                    aug_i, aug_l = add_noise(aug_i, l)
+                if op == 1: 
+                    aug_i, aug_l = flip(aug_i, l)
+                if op == 2: 
+                    aug_i, aug_l = scale(aug_i, l)
+
+            crop = get_neg_crop(aug_i) 
+            print(f'crop shape: {crop.shape}')
+
+            outpath = os.path.join(data_path, 'dataset', f'{scan.scanId}_{str(count)}.npz')
+
+            np.savez_compressed(file=outpath,
+                                img=[crop],
+                                label=0, 
+                                bbox=[0, 0, 0, 0],)
+
+            count += 1
+        
+        pbar.set_postfix(count=count)
+
+        """
+            crop_rv = shift_crop(img, l, 25)
+
+            if crop_rv == None: 
+                continue
+
+            reg_crop, reg_c_lbl = crop_rv
+            
+            flipped, flipped_lbl = flip(img, l)
+
+            crop_rv = shift_crop(flipped, flipped_lbl, 25)
+
+            noisy, noisy_lbl = add_noise(img, l)
+
+            crop_rv = shift_crop(noisy, noisy_lbl, 25)
+
+            if crop_rv == None: 
+                continue
+
+            noisy_crop, noisy_c_lbl = crop_rv
+            
+            flipped, flipped_lbl = flip(img, l)
+
+            crop_rv = shift_crop(flipped, flipped_lbl, 25)
+
+            if crop_rv == None: 
+                continue
+
+            flipped_crop, flipped_c_lbl = crop_rv
+
+            scaled, scaled_lbl = scale(img, l)
+            
+            crop_rv = shift_crop(scaled, scaled_lbl, 25)
+
+            if crop_rv == None: 
+                continue
+
+            scaled_crop, scaled_c_lbl = crop_rv
+
+            total, total_lbl =  add_noise(img, l)
+            total, total_lbl =  flip(total, total_lbl)
+            total, total_lbl =  scale(total, total_lbl)
+
+            crop_rv = shift_crop(total, total_lbl, 25)
+
+            if crop_rv == None: 
+                continue
+
+            total_crop, total_c_lbl = crop_rv
+
+            fig, axs = plt.subplots(5, 2)
+
+            axs[0, 0].imshow(img[int(l[2])], cmap=plt.bone())
+            axs[0, 0].set_title("Original")
+            axs[0, 0].add_patch(make_plt_rect(l, 'r'))
+
+            axs[0, 1].imshow(reg_crop[int(reg_c_lbl[2])], cmap=plt.bone())
+            axs[0, 1].set_title("Original Crop")
+            axs[0, 1].add_patch(make_plt_rect(reg_c_lbl, 'r'))
+
+            axs[1, 0].imshow(noisy[int(noisy_lbl[2])], cmap=plt.bone())
+            axs[1, 0].set_title("Noise")
+            axs[1, 0].add_patch(make_plt_rect(noisy_lbl, 'r'))
+
+            axs[1, 1].imshow(noisy_crop[int(noisy_c_lbl[2])], cmap=plt.bone())
+            axs[1, 1].set_title("Noise Crop")
+            axs[1, 1].add_patch(make_plt_rect(noisy_c_lbl, 'r'))
+
+            axs[2, 0].imshow(flipped[int(flipped_lbl[2])], cmap=plt.bone())
+            axs[1, 0].set_title("Flipped")
+            axs[2, 0].add_patch(make_plt_rect(flipped_lbl, 'r'))
+
+            axs[2, 1].imshow(flipped_crop[int(flipped_c_lbl[2])], cmap=plt.bone())
+            axs[2, 1].set_title("Flipped Crop")
+            axs[2, 1].add_patch(make_plt_rect(flipped_c_lbl, 'r'))
+
+            axs[3, 0].imshow(scaled[int(scaled_lbl[2])], cmap=plt.bone())
+            axs[3, 0].set_title("Scaled")
+            axs[3, 0].add_patch(make_plt_rect(scaled_lbl, 'r'))
+
+            axs[3, 1].imshow(scaled_crop[int(scaled_c_lbl[2])], cmap=plt.bone())
+            axs[3, 1].set_title("Scaled Crop")
+            axs[3, 1].add_patch(make_plt_rect(scaled_c_lbl, 'r'))
+
+            axs[4, 0].imshow(total[int(total_lbl[2])], cmap=plt.bone())
+            axs[4, 0].set_title("All")
+            axs[4, 0].add_patch(make_plt_rect(total_lbl, 'r'))
+
+            axs[4, 1].imshow(total_crop[int(total_c_lbl[2])], cmap=plt.bone())
+            axs[4, 1].set_title("All Crop")
+            axs[4, 1].add_patch(make_plt_rect(total_c_lbl, 'r'))
+
+            plt.savefig(f"imgs/augmentations_{scan.scanId}.png")
+            plt.show()
+            plt.cla()
+            """
+            
+        """
+            i1, l1 = add_noise(img, l) 
+            i2, l2 = flip(img, l)
+            i3, l3 = scale(img, l)
+
+            # Further augmentation with noisy images             
+            i4, l4 = flip(i1, l1)
+            i5, l5 = scale(i1, l1)
+
+            # Do last augmentation on noisy + flipped/scaled images
+            i6, l6 = flip(i5, l5)
+            i7, l7 = scale(i4, l4)
+
+            augmentations_img = [i1, i2, i3, i4, i5, i6, i7]
+            augmentations_lbl = [l1, l2, l3, l4, l5, l6, l7]
+
+            for i in range(7): 
+                crop_rv = shift_crop(augmentations_img[i], augmentations_lbl[i], 25)
+
+                if crop_rv == None: 
+                    continue
+
+                crop, c_lbl = crop_rv
+
+                plt.imshow(crop[int(c_lbl[2])], cmap=plt.bone())
+                plt.gca().add_patch(make_plt_rect(c_lbl, color='r'))
+                plt.show()
+            """
+
