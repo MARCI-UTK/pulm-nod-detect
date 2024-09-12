@@ -223,7 +223,7 @@ def augment(scan):
 
             for i in range(len(aug_imgs)): 
 
-                outpath = os.path.join(data_path, 'thread_test', f'{scan.scanId}_{str(count)}.npz')
+                outpath = os.path.join(data_path, 'dataset', f'{scan.scanId}_{str(count)}.npz')
                 np.savez_compressed(file=outpath,
                                     img=[aug_imgs[i],],
                                     label=1, 
@@ -251,7 +251,7 @@ def augment(scan):
 
             crop = get_neg_crop(aug_i) 
 
-            outpath = os.path.join(data_path, 'thread_test', f'{scan.scanId}_{str(count)}.npz')
+            outpath = os.path.join(data_path, 'dataset', f'{scan.scanId}_{str(count)}.npz')
 
             np.savez_compressed(file=outpath,
                                 img=[crop],
@@ -268,7 +268,7 @@ ops = list(powerset(ops))
 ops = [list(x) for x in ops]
 """
 
-pool = concurrent.futures.ThreadPoolExecutor(max_workers=24)
+pool = concurrent.futures.ThreadPoolExecutor(max_workers=32)
 
 with tqdm(scans) as pbar: 
     futures = [pool.submit(augment, s) for s in scans]
