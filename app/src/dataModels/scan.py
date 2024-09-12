@@ -73,18 +73,12 @@ class RawScan():
             maskSlice = self.mask[i]
 
             # Window and level Hounsfield range 
-            windowedScan = windowImage(img=scanSlice, window=600, level=-1200) 
-
-            # Normalize pixels to be 0-256
-            # normalizedPixelSlice = (windowedScan // 256).astype('uint8')
-
-            # Apply mask to scan 
-            #maskedScan = normalizedPixelSlice * maskSlice
+            windowedScan = windowImage(img=scanSlice, window=1500, level=-600) 
 
             maskHighVals = (maskSlice == 0)
 
-            final = np.copy(scanSlice)
-            final[maskHighVals] = -1500
+            final = np.copy(windowedScan)
+            final[maskHighVals] = np.min(windowedScan)
 
             cleanScan.append(final) 
 

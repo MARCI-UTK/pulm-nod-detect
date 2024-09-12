@@ -1,15 +1,14 @@
+import concurrent.futures
 import os
 import glob
-import json 
-import torch
-import random 
-import itertools
 from tqdm import tqdm
 import numpy as np 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from scipy.ndimage import zoom
 import torch.nn.functional
+import threading
+import concurrent
 
 from src.dataModels.scan import CleanScan
 from src.util.util import powerset
@@ -167,80 +166,70 @@ def shift_crop(img, nod_loc, s_bound):
 
     return crop, bbox
 
-# 1185 total nodules (multiple per scan) !!
+def augment(scan): 
+    count = 0
 
-"""
-ops = [0, 1, 2]
-ops = list(powerset(ops))
-ops = [list(x) for x in ops]
-"""
+    ops = [0, 1, 2]
+    ops = list(powerset(ops))
+    ops = [list(x) for x in ops]
 
-count = 0
-with tqdm(scans) as pbar: 
-    for s in pbar: 
+    scan = CleanScan(scan)
 
-        ops = [0, 1, 2]
-        ops = list(powerset(ops))
-        ops = [list(x) for x in ops]
+    img = scan.img
+    lbl = scan.annotations
 
-        scan = CleanScan(s)
-        
-        img = scan.img
-        lbl = scan.annotations
+    img = (img - np.min(img)) / (np.max(img) - np.min(img)) 
 
-        img = (img - np.min(img)) / (np.max(img) - np.min(img)) 
+    if len(lbl) != 0: 
+        lbl = [world_to_vox(x, scan.origin, scan.spacing) for x in lbl]
 
-        if len(lbl) != 0: 
-            lbl = [world_to_vox(x, scan.origin, scan.spacing) for x in lbl]
+        for l in lbl: 
 
-            for l in lbl: 
+            invalid = check_invalid_nod(img, l)
 
-                invalid = check_invalid_nod(img, l)
+            if invalid: 
+                continue
 
-                if invalid: 
-                    continue
+            aug_imgs = []
+            aug_lbls = []
 
-                aug_imgs = []
-                aug_lbls = []
+            keep = np.random.permutation(len(ops))
+            ops = [ops[i] for i in keep]
+            
+            for op_set in ops: 
+                aug_i, aug_l = img, l
 
-                keep = np.random.permutation(len(ops))
-                ops = [ops[i] for i in keep]
-                
-                for op_set in ops: 
-                    aug_i, aug_l = img, l
-
-                    if len(op_set) == 0:
-                        aug_i, aug_l = shift_crop(aug_i, aug_l, 24)
-
-                        aug_imgs.append(aug_i)
-                        aug_lbls.append(aug_l)
-
-                        continue
-
-                    for op in op_set: 
-
-                        if op == 0: 
-                            aug_i, aug_l = add_noise(aug_i, aug_l)
-                        if op == 1: 
-                            aug_i, aug_l = flip(aug_i, aug_l)
-                        if op == 2: 
-                            aug_i, aug_l = scale(aug_i, aug_l)
-
+                if len(op_set) == 0:
                     aug_i, aug_l = shift_crop(aug_i, aug_l, 24)
-                        
+
                     aug_imgs.append(aug_i)
                     aug_lbls.append(aug_l)
 
-                for i in range(len(aug_imgs)): 
-                    print(f'crop shape: {aug_imgs[i].shape}')
+                    continue
 
-                    outpath = os.path.join(data_path, 'dataset', f'{scan.scanId}_{str(count)}.npz')
-                    np.savez_compressed(file=outpath,
-                                        img=[aug_imgs[i],],
-                                        label=1, 
-                                        bbox=aug_lbls[i],)
+                for op in op_set: 
 
-                    count += 1
+                    if op == 0: 
+                        aug_i, aug_l = add_noise(aug_i, aug_l)
+                    if op == 1: 
+                        aug_i, aug_l = flip(aug_i, aug_l)
+                    if op == 2: 
+                        aug_i, aug_l = scale(aug_i, aug_l)
+
+                aug_i, aug_l = shift_crop(aug_i, aug_l, 24)
+                    
+                aug_imgs.append(aug_i)
+                aug_lbls.append(aug_l)
+
+            for i in range(len(aug_imgs)): 
+
+                outpath = os.path.join(data_path, 'thread_test', f'{scan.scanId}_{str(count)}.npz')
+                np.savez_compressed(file=outpath,
+                                    img=[aug_imgs[i],],
+                                    label=1, 
+                                    bbox=aug_lbls[i],)
+
+                count += 1
 
         else: 
             l = [0, 0, 0, 0]
@@ -261,9 +250,8 @@ with tqdm(scans) as pbar:
                     aug_i, aug_l = scale(aug_i, l)
 
             crop = get_neg_crop(aug_i) 
-            print(f'crop shape: {crop.shape}')
 
-            outpath = os.path.join(data_path, 'dataset', f'{scan.scanId}_{str(count)}.npz')
+            outpath = os.path.join(data_path, 'thread_test', f'{scan.scanId}_{str(count)}.npz')
 
             np.savez_compressed(file=outpath,
                                 img=[crop],
@@ -271,132 +259,21 @@ with tqdm(scans) as pbar:
                                 bbox=[0, 0, 0, 0],)
 
             count += 1
-        
-        pbar.set_postfix(count=count)
+    
+# 1185 total nodules (multiple per scan) !!
 
-        """
-            crop_rv = shift_crop(img, l, 25)
+"""
+ops = [0, 1, 2]
+ops = list(powerset(ops))
+ops = [list(x) for x in ops]
+"""
 
-            if crop_rv == None: 
-                continue
+pool = concurrent.futures.ThreadPoolExecutor(max_workers=24)
 
-            reg_crop, reg_c_lbl = crop_rv
-            
-            flipped, flipped_lbl = flip(img, l)
+with tqdm(scans) as pbar: 
+    futures = [pool.submit(augment, s) for s in scans]
 
-            crop_rv = shift_crop(flipped, flipped_lbl, 25)
-
-            noisy, noisy_lbl = add_noise(img, l)
-
-            crop_rv = shift_crop(noisy, noisy_lbl, 25)
-
-            if crop_rv == None: 
-                continue
-
-            noisy_crop, noisy_c_lbl = crop_rv
-            
-            flipped, flipped_lbl = flip(img, l)
-
-            crop_rv = shift_crop(flipped, flipped_lbl, 25)
-
-            if crop_rv == None: 
-                continue
-
-            flipped_crop, flipped_c_lbl = crop_rv
-
-            scaled, scaled_lbl = scale(img, l)
-            
-            crop_rv = shift_crop(scaled, scaled_lbl, 25)
-
-            if crop_rv == None: 
-                continue
-
-            scaled_crop, scaled_c_lbl = crop_rv
-
-            total, total_lbl =  add_noise(img, l)
-            total, total_lbl =  flip(total, total_lbl)
-            total, total_lbl =  scale(total, total_lbl)
-
-            crop_rv = shift_crop(total, total_lbl, 25)
-
-            if crop_rv == None: 
-                continue
-
-            total_crop, total_c_lbl = crop_rv
-
-            fig, axs = plt.subplots(5, 2)
-
-            axs[0, 0].imshow(img[int(l[2])], cmap=plt.bone())
-            axs[0, 0].set_title("Original")
-            axs[0, 0].add_patch(make_plt_rect(l, 'r'))
-
-            axs[0, 1].imshow(reg_crop[int(reg_c_lbl[2])], cmap=plt.bone())
-            axs[0, 1].set_title("Original Crop")
-            axs[0, 1].add_patch(make_plt_rect(reg_c_lbl, 'r'))
-
-            axs[1, 0].imshow(noisy[int(noisy_lbl[2])], cmap=plt.bone())
-            axs[1, 0].set_title("Noise")
-            axs[1, 0].add_patch(make_plt_rect(noisy_lbl, 'r'))
-
-            axs[1, 1].imshow(noisy_crop[int(noisy_c_lbl[2])], cmap=plt.bone())
-            axs[1, 1].set_title("Noise Crop")
-            axs[1, 1].add_patch(make_plt_rect(noisy_c_lbl, 'r'))
-
-            axs[2, 0].imshow(flipped[int(flipped_lbl[2])], cmap=plt.bone())
-            axs[1, 0].set_title("Flipped")
-            axs[2, 0].add_patch(make_plt_rect(flipped_lbl, 'r'))
-
-            axs[2, 1].imshow(flipped_crop[int(flipped_c_lbl[2])], cmap=plt.bone())
-            axs[2, 1].set_title("Flipped Crop")
-            axs[2, 1].add_patch(make_plt_rect(flipped_c_lbl, 'r'))
-
-            axs[3, 0].imshow(scaled[int(scaled_lbl[2])], cmap=plt.bone())
-            axs[3, 0].set_title("Scaled")
-            axs[3, 0].add_patch(make_plt_rect(scaled_lbl, 'r'))
-
-            axs[3, 1].imshow(scaled_crop[int(scaled_c_lbl[2])], cmap=plt.bone())
-            axs[3, 1].set_title("Scaled Crop")
-            axs[3, 1].add_patch(make_plt_rect(scaled_c_lbl, 'r'))
-
-            axs[4, 0].imshow(total[int(total_lbl[2])], cmap=plt.bone())
-            axs[4, 0].set_title("All")
-            axs[4, 0].add_patch(make_plt_rect(total_lbl, 'r'))
-
-            axs[4, 1].imshow(total_crop[int(total_c_lbl[2])], cmap=plt.bone())
-            axs[4, 1].set_title("All Crop")
-            axs[4, 1].add_patch(make_plt_rect(total_c_lbl, 'r'))
-
-            plt.savefig(f"imgs/augmentations_{scan.scanId}.png")
-            plt.show()
-            plt.cla()
-            """
-            
-        """
-            i1, l1 = add_noise(img, l) 
-            i2, l2 = flip(img, l)
-            i3, l3 = scale(img, l)
-
-            # Further augmentation with noisy images             
-            i4, l4 = flip(i1, l1)
-            i5, l5 = scale(i1, l1)
-
-            # Do last augmentation on noisy + flipped/scaled images
-            i6, l6 = flip(i5, l5)
-            i7, l7 = scale(i4, l4)
-
-            augmentations_img = [i1, i2, i3, i4, i5, i6, i7]
-            augmentations_lbl = [l1, l2, l3, l4, l5, l6, l7]
-
-            for i in range(7): 
-                crop_rv = shift_crop(augmentations_img[i], augmentations_lbl[i], 25)
-
-                if crop_rv == None: 
-                    continue
-
-                crop, c_lbl = crop_rv
-
-                plt.imshow(crop[int(c_lbl[2])], cmap=plt.bone())
-                plt.gca().add_patch(make_plt_rect(c_lbl, color='r'))
-                plt.show()
-            """
-
+    for future in concurrent.futures.as_completed(futures): 
+        pbar.update(1)
+    
+pool.shutdown(wait=True)
