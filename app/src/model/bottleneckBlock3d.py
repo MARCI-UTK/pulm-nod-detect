@@ -1,6 +1,5 @@
 import torch.nn as nn
 import torch
-from hflayers import HopfieldLayer
 
 class Bottleneck3d(nn.Module):
 
@@ -57,12 +56,7 @@ class Bottleneck3d(nn.Module):
         
         # 1x1
         self.conv3_1x1 = nn.Conv3d(in_channels=self.intermediate_channels, out_channels=self.intermediate_channels, kernel_size=1, stride=1, padding=0, bias=False )
-        self.batchnorm3 = nn.BatchNorm3d(self.intermediate_channels)
-
-        self.hopfield = HopfieldLayer(input_size=self.intermediate_channels,
-                                      lookup_weights_as_separated=True,
-                                      lookup_targets_as_trainable=False,
-                                      normalize_stored_pattern_affine=True,)
+        self.batchnorm3 = nn.BatchNorm3d(self.intermediate_channels) 
 
     def forward(self,x):
         # input stored to be added before the final relu
@@ -88,14 +82,6 @@ class Bottleneck3d(nn.Module):
         else:
             x += self.projection(skip_x)
         
-        #x = x.view(32, -1, self.intermediate_channels).contiguous()
-
-        orig_shape = x.shape
-
-        x = x.view(orig_shape[0], -1, self.intermediate_channels).contiguous()
-        x = self.hopfield(x)
-        x = x.reshape(orig_shape).contiguous()
-
         # final relu
         x = self.relu(x)
 
