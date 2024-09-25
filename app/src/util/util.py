@@ -144,9 +144,12 @@ def apply_bb_deltas(anc_box, deltas):
           anc_box[2] + deltas[2], 
           anc_box[3] * np.exp(deltas[3])] 
     """
-    
+
     rv = [anc_box[i] + (anc_box[3] * deltas[i]) for i in range(3)]
-    rv.append(anc_box[3] * np.exp(deltas[3]))
+    rv.append(anc_box[3] * torch.exp(deltas[3]))
+    rv = [x.item() for x in rv]
+
+    rv = torch.Tensor(rv)
 
     return rv
 
@@ -182,6 +185,81 @@ def make_corners(anc_boxes, pred_deltas):
     print(corners.shape)
 
     return corners
+
+def rpn_to_roi(cls_scores, pred_locs, anc_boxes): 
+    cls_scores = cls_scores.squeeze(1)
+    cls_scores = torch.sigmoid(cls_scores)
+
+    max_cls_scores, max_cls_scores_idxs = torch.max(cls_scores, dim=1, keepdim=True)
+
+    mask = torch.ones(cls_scores.shape)
+
+    for i in range(len(cls_scores)): 
+
+        best_box = apply_bb_deltas(anc_boxes[max_cls_scores_idxs[i]][0], pred_locs[i][max_cls_scores_idxs[i]][0])
+        for j in range(len(cls_scores[i])): 
+            if j == max_cls_scores_idxs[i]: 
+                continue
+            
+            current_box = apply_bb_deltas(anc_boxes[j], pred_locs[i][j]) 
+            
+            iou = get_iou(best_box, current_box)
+
+            if iou.item() > 0.1: 
+                mask[i][j] = 0
+
+def weight_init(m): 
+    if isinstance(m, torch.nn.Conv3d): 
+        torch.nn.init.xavier_uniform_(m.weight, gain=np.sqrt(2))
+    elif isinstance(m, torch.nn.Linear): 
+        torch.nn.init.xavier_uniform_(m.weight, gain=np.sqrt(2))
+
+def update_cm(y, pred, cm): 
+    pred_binary = torch.where(pred > 0.5, 1., 0.)
+
+    cm[0] += ((pred_binary == 1.) & (y == 1.)).sum().item()
+    cm[1] += ((pred_binary == 0.) & (y == 0.)).sum().item()
+    cm[2] += ((pred_binary == 1.) & (y == 0.)).sum().item()
+    cm[3] += ((pred_binary == 0.) & (y == 1.)).sum().item()
+
+def makeDataLoaders(): 
+    dataPath = '/data/marci/luna16/'
+
+    img_paths = [os.path.join(dataPath, 'crops', f) for f in os.listdir(os.path.join(dataPath, 'crops'))]
+    label_paths = [os.path.join(dataPath, 'labels', f) for f in os.listdir(os.path.join(dataPath, 'labels'))]
+
+    train_img_idxs = int(len(img_paths) * 0.8)
+    train_img_paths = img_paths[:train_img_idxs - 1]
+    val_img_paths   = img_paths[train_img_idxs:]
+
+    train_label_idxs = int(len(img_paths) * 0.8)
+    train_label_paths = label_paths[:train_label_idxs - 1]
+    val_label_paths   = label_paths[train_label_idxs:]
+
+    train_data = CropDataset(img_paths=train_img_paths, label_paths=train_label_paths)
+    val_data   = CropDataset(img_paths=val_img_paths, label_paths=val_label_paths)
+    batch_size = 32
+    
+    # 708 positive samples in training set 
+    train_loader = DataLoader(
+        dataset=train_data,
+        batch_size=batch_size, 
+        shuffle=True
+    )
+
+    # 159 positive samples in validation set 
+    val_loader = DataLoader(
+        dataset=val_data,
+        batch_size=batch_size, 
+        shuffle=True
+    )
+
+    return train_loader, val_loader
+
+def powerset(iterable):
+    "list(powerset([1,2,3])) --> [(), (1,), (2,), (3,), (1,2), (1,3), (2,3), (1,2,3)]"
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
 
 def nms(pred_y, y, boxes): 
     pred_y = pred_y.squeeze()
@@ -283,56 +361,3 @@ def generate_roi_input(pred_deltas, gt_deltas, cls_scores, y, anc_box_list):
     roi_y = torch.stack(roi_y)
 
     return roi_y, roi_corners, roi_gt_deltas
-
-def weight_init(m): 
-    if isinstance(m, torch.nn.Conv3d): 
-        torch.nn.init.xavier_uniform_(m.weight) 
-    elif isinstance(m, torch.nn.Linear): 
-        torch.nn.init.xavier_uniform_(m.weight)
-
-def update_cm(y, pred, cm): 
-    pred_binary = torch.where(pred > 0.5, 1., 0.)
-
-    cm[0] += ((pred_binary == 1.) & (y == 1.)).sum().item()
-    cm[1] += ((pred_binary == 0.) & (y == 0.)).sum().item()
-    cm[2] += ((pred_binary == 1.) & (y == 0.)).sum().item()
-    cm[3] += ((pred_binary == 0.) & (y == 1.)).sum().item()
-
-def makeDataLoaders(): 
-    dataPath = '/data/marci/dlewis37/luna16/'
-
-    img_paths = [os.path.join(dataPath, 'dataset', f) for f in os.listdir(os.path.join(dataPath, 'dataset'))]
-    label_paths = [os.path.join(dataPath, 'rpn_labels', f) for f in os.listdir(os.path.join(dataPath, 'rpn_labels'))]
-
-    train_img_idxs = int(len(img_paths) * 0.8)
-    train_img_paths = img_paths[:train_img_idxs - 1]
-    val_img_paths   = img_paths[train_img_idxs:]
-
-    train_label_idxs = int(len(img_paths) * 0.8)
-    train_label_paths = label_paths[:train_label_idxs - 1]
-    val_label_paths   = label_paths[train_label_idxs:]
-
-    train_data = CropDataset(img_paths=train_img_paths, label_paths=train_label_paths)
-    val_data   = CropDataset(img_paths=val_img_paths, label_paths=val_label_paths)
-    batch_size = 32
-    
-    # 708 positive samples in training set 
-    train_loader = DataLoader(
-        dataset=train_data,
-        batch_size=batch_size, 
-        shuffle=True
-    )
-
-    # 159 positive samples in validation set 
-    val_loader = DataLoader(
-        dataset=val_data,
-        batch_size=batch_size, 
-        shuffle=True
-    )
-
-    return train_loader, val_loader
-
-def powerset(iterable):
-    "list(powerset([1,2,3])) --> [(), (1,), (2,), (3,), (1,2), (1,3), (2,3), (1,2,3)]"
-    s = list(iterable)
-    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))

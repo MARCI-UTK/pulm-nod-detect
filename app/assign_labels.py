@@ -1,13 +1,10 @@
 from rpn import get_centers, get_anc_boxes
-from src.util.util import get_iou, xyzd_2_2corners, corners_2_xyzd, scanPathToId
-from src.util.iou_3d import box3d_iou, get_3d_box
+from src.util.util import get_iou, corners_2_xyzd, scanPathToId
 
 import os
+import concurrent
 import numpy as np 
-import matplotlib.pyplot as plt
-
-dataPath = '/data/marci/dlewis37/luna16/'
-paths = [os.path.join(dataPath, 'dataset', f) for f in os.listdir(os.path.join(dataPath, 'dataset'))]    
+from tqdm import tqdm
 
 def assign_invalid(corners, labels):
     for idx, c in enumerate(corners): 
@@ -72,33 +69,41 @@ def make_final_locations(corners, labels, gt_box):
 
     return final_locs
 
-def assign_labels(paths):
-    centers = get_centers(orig_width=96, feat_width=24)
-    corners = get_anc_boxes(centers=centers)
+def assign_label(in_path, data_path, corners):
+    anchor_labels = np.zeros(len(corners))
+    anchor_labels = assign_invalid(corners=corners, labels=anchor_labels) 
 
-    xyzd_corners = [corners_2_xyzd(c) for c in corners]
+    data = np.load(in_path)
+    gt_box = data['bbox']
 
-    for p in paths: 
-        anchor_labels = np.zeros(len(corners))
-        anchor_labels = assign_invalid(corners=corners, labels=anchor_labels)
+    anchor_labels = assign_pos_neg(corners=corners, labels=anchor_labels, gt_box=gt_box)        
 
-        data = np.load(p)
-        img = data['img']
-        gt_box = data['bbox']
+    # Convert corners to xyzd format
+    corners = [corners_2_xyzd(c) for c in corners]
+    final_locs = make_final_locations(corners=corners, labels=anchor_labels, gt_box=gt_box)
 
-        anchor_labels = assign_pos_neg(corners=corners, labels=anchor_labels, gt_box=gt_box)        
-
-        final_locs = make_final_locations(corners=xyzd_corners, labels=anchor_labels, gt_box=gt_box)
-
-        scanId = scanPathToId(p)
-        outpath = os.path.join(dataPath, 'rpn_labels', f'{scanId}.npz')
-        np.savez_compressed(file=outpath,
-                            labels=anchor_labels,
-                            locs=final_locs)
-        
-        print(f'wrote to {outpath}') 
-
+    scanId = scanPathToId(in_path)
+    outpath = os.path.join(data_path, 'labels', f'{scanId}.npz')
+    np.savez_compressed(file=outpath,
+                        labels=anchor_labels,
+                        locs=final_locs)
+    
     return 
 
 if __name__ == "__main__": 
-    assign_labels(paths=paths)
+
+    data_path = '/data/marci/luna16'
+    paths = [os.path.join(data_path, 'crops', f) for f in os.listdir(os.path.join(data_path, 'crops'))]    
+
+    centers = get_centers(orig_width=96, feat_width=24)
+    corners = get_anc_boxes(centers=centers)
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=32)
+
+    with tqdm(paths) as pbar: 
+        futures = [pool.submit(assign_label, p, data_path, corners) for p in paths]
+
+        for future in concurrent.futures.as_completed(futures): 
+            pbar.update(1)
+        
+    pool.shutdown(wait=True)

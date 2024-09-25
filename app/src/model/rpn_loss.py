@@ -29,13 +29,9 @@ class ClsLoss(nn.Module):
         else: 
             pos_weight = (targets == 0.).sum() / (targets == 1.).sum()
 
-        loss = F.binary_cross_entropy_with_logits(input=pred, target=targets, pos_weight=pos_weight, reduction='none')
+        loss = F.binary_cross_entropy_with_logits(input=pred, target=targets, pos_weight=pos_weight, reduction='mean')
         
-        rv = 0
-        for i in range(len(loss)): 
-            rv += 0.5 * loss[i].sum()
-
-        return rv / len(loss)
+        return 0.5 * loss
     
 class ValClsLoss(nn.Module):
     def __init__(self):

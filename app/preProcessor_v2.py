@@ -7,7 +7,7 @@ from src.dataModels.scan import RawScan
 # TODO: use argparse! 
 
 # Paths to the LUNA16 dataset directory  
-dataPath = '/data/marci/dlewis37/luna16/' 
+dataPath = '/data/marci/luna16/' 
 
 # Dataset annotations (.csv)
 annotationPath = os.path.join(dataPath, 'annotations.csv')
@@ -19,11 +19,11 @@ Save the processed scan as a .npy file using the scan's ID from the data directo
 def main():
 
     for i in range(10):              
-        for mhdPath in glob.glob(os.path.join(dataPath, f'scan/subset{i}', '*.mhd')):   
+        for mhdPath in glob.glob(os.path.join(dataPath, f'img/subset{i}', '*.mhd')):   
             scanId = scanPathToId(mhdPath)
 
             # Segmentation mask 
-            maskPath = os.path.join(dataPath, 'mask', f'{scanId}.mhd')
+            maskPath = os.path.join(dataPath, 'segmentation_masks', f'{scanId}.mhd')
 
             # Image output path 
             npyPath  = os.path.join(dataPath, 'processed_scan', f'{scanId}.npy')

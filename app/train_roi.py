@@ -18,7 +18,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from clearml import Task, Logger
 
-task = Task.init(project_name="Pulmonary Nodule Detection", task_name="ROI w/ Augmented Data + Regularization (0.0001) + Momentum (Init. LR = 0.01)")
+task = Task.init(project_name="Pulmonary Nodule Detection", task_name="ROI Test")
 logger = task.get_logger()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

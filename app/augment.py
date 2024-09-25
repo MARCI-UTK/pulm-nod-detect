@@ -3,25 +3,20 @@ import os
 import glob
 from tqdm import tqdm
 import numpy as np 
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 from scipy.ndimage import zoom
-import torch.nn.functional
-import threading
 import concurrent
 
 from src.dataModels.scan import CleanScan
 from src.util.util import powerset
-from src.util.crop_util import get_neg_crop
 
-np.random.seed(27)
+def get_neg_crop(img): 
+    randX = np.random.randint(0, img.shape[2] - 96)
+    randY = np.random.randint(0, img.shape[1] - 96)
+    randZ = np.random.randint(0, img.shape[0] - 96)
 
-data_path = '/data/marci/dlewis37/luna16'
-scan_paths = os.path.join(data_path, 'processed_scan', '*.npy')
-scans = glob.glob(scan_paths)
+    crop = img[randZ:randZ + 96, randY:randY + 96, randX:randX + 96]
 
-label_paths = os.path.join(data_path, 'processed_scan', '*.json')
-labels = glob.glob(label_paths)
+    return crop
 
 def world_to_vox(point: tuple, origin: tuple, spacing: tuple) -> tuple: 
     world_x, world_y, world_z, diameter = point
@@ -38,14 +33,6 @@ def world_to_vox(point: tuple, origin: tuple, spacing: tuple) -> tuple:
 
     return voxel_point
 
-def make_plt_rect(xyzd, color): 
-    x = xyzd[0] - xyzd[3] // 2
-    y = xyzd[1] - xyzd[3] // 2
-    d = xyzd[3]
-
-    rect = Rectangle(xy=(x, y), width=d, height=d, fill=False, color=color)
-    return rect 
-
 def scanToCropCoordinate(center, nodule_voxel_location): 
     vox_x, vox_y, vox_z, diameter = nodule_voxel_location
     x_c, y_c, z_c = center
@@ -53,24 +40,6 @@ def scanToCropCoordinate(center, nodule_voxel_location):
     crop_loc_x, crop_loc_y, crop_loc_z = (vox_x - x_c, vox_y - y_c, vox_z - z_c)
     
     return (crop_loc_x, crop_loc_y, crop_loc_z, diameter)
-
-def plot_scan(img, lbl, save=False): 
-    rect = [make_plt_rect(x, 'r') for x in lbl]
-    
-    if len(lbl) == 0: 
-        slice_idx = len(img) // 2
-
-    for i in range(len(lbl)): 
-        slice_idx = int(lbl[i][2])
-
-        plt.imshow(img[slice_idx], cmap=plt.bone())
-        plt.gca().add_patch(rect[i])
-
-        if save: 
-            plt.savefig(save)
-
-        plt.show()
-        plt.cla()
 
 def flip(img, lbl): 
     axis = np.random.random()
@@ -115,7 +84,7 @@ def scale(img, lbl):
 def add_noise(img, lbl): 
     dark_mask = (img == 0)
     light_mask = (img == 1)
-
+    
     noise = np.random.normal(0, 0.05, size=img.shape)
     rv = img + noise
 
@@ -223,7 +192,7 @@ def augment(scan):
 
             for i in range(len(aug_imgs)): 
 
-                outpath = os.path.join(data_path, 'dataset', f'{scan.scanId}_{str(count)}.npz')
+                outpath = os.path.join(data_path, 'crops', f'{scan.scanId}_{str(count)}.npz')
                 np.savez_compressed(file=outpath,
                                     img=[aug_imgs[i],],
                                     label=1, 
@@ -251,7 +220,7 @@ def augment(scan):
 
             crop = get_neg_crop(aug_i) 
 
-            outpath = os.path.join(data_path, 'dataset', f'{scan.scanId}_{str(count)}.npz')
+            outpath = os.path.join(data_path, 'crops', f'{scan.scanId}_{str(count)}.npz')
 
             np.savez_compressed(file=outpath,
                                 img=[crop],
@@ -268,12 +237,19 @@ ops = list(powerset(ops))
 ops = [list(x) for x in ops]
 """
 
-pool = concurrent.futures.ThreadPoolExecutor(max_workers=32)
+if __name__ == "__main__":
+    np.random.seed(27)
 
-with tqdm(scans) as pbar: 
-    futures = [pool.submit(augment, s) for s in scans]
+    data_path = '/data/marci/luna16'
+    scan_paths = os.path.join(data_path, 'processed_scan', '*.npy')
+    scans = glob.glob(scan_paths)
 
-    for future in concurrent.futures.as_completed(futures): 
-        pbar.update(1)
-    
-pool.shutdown(wait=True)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=32)
+
+    with tqdm(scans) as pbar: 
+        futures = [pool.submit(augment, s) for s in scans]
+
+        for future in concurrent.futures.as_completed(futures): 
+            pbar.update(1)
+        
+    pool.shutdown(wait=True)

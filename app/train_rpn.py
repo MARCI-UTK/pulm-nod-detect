@@ -1,4 +1,5 @@
 import os
+import time
 import torch 
 import torch.optim as optim
 from tqdm import tqdm
@@ -13,17 +14,14 @@ from roi import ROI, CropProposals
 from src.model.feature_extractor import FeatureExtractor
 
 import matplotlib.pyplot as plt
-from torch.autograd import Variable
-import torch.nn.functional as F
-from clearml import Task, Logger
-
+from clearml import Task
 from sklearn.metrics import roc_curve
 
-task = Task.init(project_name="Pulmonary Nodule Detection", task_name="RPN Big Augmented Data + Momentum + L2 (0.0001) + LR Scheduler (init = 0.01) + Hopfield")
+task = Task.init(project_name="Pulmonary Nodule Detection", task_name="Testing")
 logger = task.get_logger()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-dataPath = '/data/marci/dlewis37/luna16/'
+dataPath = '/data/marci/luna16/'
 batch_size = 32
     
 def main(): 
@@ -51,14 +49,12 @@ def main():
     rpn.to(f'cuda:{rpn.device_ids[0]}')
 
     # Create optimizer and LR scheduler 
-    optimizer = optim.SGD(list(fe.parameters()) + list(rpn.parameters()), lr=0.01, momentum=0.9, weight_decay=0.0005)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1)
+    optimizer = optim.AdamW(list(fe.parameters()) + list(rpn.parameters()), lr=0.01)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
 
     # Define loss functions 
     reg_loss_func = RegLoss()
     cls_loss_func = ClsLoss()
-
-    train_losses = []   
     
     epochs = 100
     for e in range(epochs): 
@@ -81,7 +77,6 @@ def main():
                 y = y.unsqueeze(1)
 
                 x = x.to(f'cuda:{fe.device_ids[0]}')
-
                 y = y.to(f'cuda:{rpn.device_ids[0]}')
                 bb_y = bb_y.to(f'cuda:{rpn.device_ids[0]}')
                             
@@ -89,6 +84,13 @@ def main():
 
                 fm = fe(x)
                 pred_anch_locs, pred_cls_scores = rpn(fm)
+
+                anc_box_list = anc_box_list.to(f'cuda:{rpn.device_ids[0]}')
+                start = time.time()
+                rpn_to_roi(cls_scores=pred_cls_scores, pred_locs=pred_anch_locs, anc_boxes=anc_box_list)
+                end = time.time()
+                print(f'RPN output to ROI input time: {end - start}.')
+                exit()
 
                 update_cm(y, pred_cls_scores, train_cm)
                 

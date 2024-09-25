@@ -22,13 +22,15 @@ class RPN(nn.Module):
         self.conv_reg = nn.Conv3d(in_channels=512, out_channels=n_anchor * 4, kernel_size=1, stride=1)
 
         # Initialize weights and biases as described in Faster-RCNN paper
-        self.conv1.weight.data.normal_(0, 0.01)
+        # Originally, these were the normal distribution from 0-0.01, but Dr. Santos suggested 
+        # increasing to 0.1 to see what happens
+        self.conv1.weight.data.normal_(0, 0.1)
         self.conv1.bias.data.zero_()
 
-        self.conv_cls.weight.data.normal_(0, 0.01)
+        self.conv_cls.weight.data.normal_(0, 0.1)
         self.conv_cls.bias.data.zero_()
 
-        self.conv_reg.weight.data.normal_(0, 0.01)
+        self.conv_reg.weight.data.normal_(0, 0.1)
         self.conv_reg.bias.data.zero_() 
     
     def forward(self, x): 

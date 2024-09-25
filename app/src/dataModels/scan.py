@@ -133,7 +133,7 @@ class CleanScan():
         self.spacing = metadata['spacing']
 
     def get_scan_nodule_locations(self): 
-        annotations = pd.read_csv('/data/marci/dlewis37/luna16/csv/annotations.csv')
+        annotations = pd.read_csv('/data/marci/luna16/csv/annotations.csv')
         scan_annotations = annotations[annotations['seriesuid'] == self.scanId]
 
         nodule_locations = []
