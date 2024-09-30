@@ -42,6 +42,64 @@ def voxel_to_world(voxel_point: tuple, world_origin: tuple, spacing: tuple) -> t
     world_point = [p[i] * spacing[i] + origin[i] for i in range(3)]
     return tuple(world_point)
 
+def xyzd_2_4corners(c): 
+    x, y, z, d = c 
+    r = d / 2
+    
+    c0 = [x - r, y - r, z + r]
+    c1 = [x + r, y - r, z + r]
+    c2 = [x + r, y + r, z + r]
+    c3 = [x - r, y + r, z + r]
+    c4 = [x - r, y - r, z - r]
+    c5 = [x + r, y - r, z - r]
+    c6 = [x + r, y + r, z - r]
+    c7 = [x - r, y + r, z - r]
+    
+    rv = torch.tensor([c0, c1, c2, c3, c4, c5, c6, c7])
+    return rv
+
+def box_area(lower_left: torch.Tensor, upper_right: torch.Tensor) -> torch.Tensor: 
+    return 
+
+def nms_iou(best_box: torch.Tensor, test_box: torch.Tensor, nms_thresh: float) -> torch.Tensor: 
+    ious = []
+
+    # The volume of every box 
+    V = torch.ones((test_box.shape[0], test_box.shape[1])).to(test_box.device)
+    for i in range(3): 
+        V *= test_box[:, :, 1, i] - test_box[:, :, 0, i]
+
+    Ba = torch.ones(best_box.shape[0]).to(best_box.device)
+    for i in range(3): 
+        Ba *= best_box[:, 1, i] - best_box[:, 0, i]
+
+    # Tensor of 3 0's used for comparisons, no need to redeclare in every loop iteration
+    zeros = torch.zeros(3).to(test_box.device)
+
+    # Do this for every image in batch 
+    for i in range(32): 
+        # Begin IoU calculation
+        I1 = torch.maximum(best_box[i, 0, :], test_box[i, :, 0, :])
+        I2 = torch.minimum(best_box[i, 1, :], test_box[i, :, 1, :])
+
+        O = torch.maximum(zeros, I2 - I1)
+
+        IA = torch.prod(O, dim=1)
+
+        U = Ba[i] + V[i, :] - IA
+
+        IoU = IA / U 
+
+        IoU[(U == 0)] = 0
+
+        ious.append(IoU)
+
+    ious = torch.stack(ious).to(best_box.device)
+
+    mask = (ious < nms_thresh) | (ious < 1)
+
+    return mask
+
 def get_iou(c1, c2): 
     # cube = [x, y, z, d]
 
@@ -68,8 +126,6 @@ def xyzd_2_2corners(c):
     x, y, z, d = c 
     r = d / 2
 
-    center = [x, y, z]
-
     c_1 = [x - r, y - r, z - r]
     c_2 = [x + r, y + r, z + r]
 
@@ -80,7 +136,7 @@ def corners_2_xyzd(c):
     c2 = c[1]
 
     d = abs(c2[0] - c1[0])
-    xyz = [c2[i] - (d // 2) for i in range(3)]
+    xyz = [c2[i] - (d / 2) for i in range(3)]
     
     xyz.append(d)
 
@@ -145,68 +201,57 @@ def apply_bb_deltas(anc_box, deltas):
           anc_box[3] * np.exp(deltas[3])] 
     """
 
-    rv = [anc_box[i] + (anc_box[3] * deltas[i]) for i in range(3)]
-    rv.append(anc_box[3] * torch.exp(deltas[3]))
-    rv = [x.item() for x in rv]
+    new_x = anc_box[:, 0] + (anc_box[:, 3] * deltas[:, :, 0])
+    new_y = anc_box[:, 1] + (anc_box[:, 3] * deltas[:, :, 1]) 
+    new_z = anc_box[:, 2] + (anc_box[:, 3] * deltas[:, :, 2])
+    new_d = anc_box[:, 3] * torch.exp(deltas[:, :, 3])  
 
-    rv = torch.Tensor(rv)
-
+    rv = torch.stack((new_x, new_y, new_z, new_d), dim=2)
+    
     return rv
 
 def deltas_2_corners(anc_box, deltas): 
-    rv = [anc_box[i] + (anc_box[3] * deltas[i]) for i in range(3)]
-    rv.append(anc_box[3] * torch.exp(deltas[3]))
+    modified_boxes = apply_bb_deltas(anc_box=anc_box, deltas=deltas)
 
-    x, y, z, d = rv 
-    r = d / 2
+    X = modified_boxes[:, :, 0]
+    Y = modified_boxes[:, :, 1]
+    Z = modified_boxes[:, :, 2]
+    R = modified_boxes[:, :, 3] / 2
 
-    c_1 = [x - r, y - r, z - r]
-    c_2 = [x + r, y + r, z + r]
+    corners = torch.zeros(modified_boxes.shape[0], modified_boxes.shape[1], 2, 3).to(anc_box.device)
 
-    return [c_1, c_2]
+    corners[:, :, 0, 0] = X - R
+    corners[:, :, 0, 1] = Y - R
+    corners[:, :, 0, 2] = Z - R
 
-"""
-args: 
-    - list of anchor box locations 
-    - the suggested deltas output by regression head of RPN 
-
-returns: 
-    - an array of [batch_size, num_anchor_boxes, 2, 3]
-    - the last 2 dimensions come from having 2 corners with 3 coordinates each 
-"""
-def make_corners(anc_boxes, pred_deltas): 
-    corners = torch.zeros(pred_deltas.shape[0], pred_deltas.shape[1], 2, 3).cuda()
-
-    # Loop through all crops in mini-batch  
-    for i in range(len(pred_deltas)):
-        tmp = [deltas_2_corners(anc_boxes[x], pred_deltas[i][x]) for x in range(len(pred_deltas[i]))]
-        corners[i] = torch.tensor(tmp)
-
-    print(corners.shape)
+    corners[:, :, 1, 0] = X + R
+    corners[:, :, 1, 1] = Y + R
+    corners[:, :, 1, 2] = Z + R
 
     return corners
 
-def rpn_to_roi(cls_scores, pred_locs, anc_boxes): 
+def rpn_to_roi(cls_scores, pred_locs, anc_boxes, nms_thresh, top_n): 
     cls_scores = cls_scores.squeeze(1)
     cls_scores = torch.sigmoid(cls_scores)
 
-    max_cls_scores, max_cls_scores_idxs = torch.max(cls_scores, dim=1, keepdim=True)
+    mask = (cls_scores > 0.1)
 
-    mask = torch.ones(cls_scores.shape)
+    max_cls_score_idx = torch.argmax(cls_scores, dim=1)
 
-    for i in range(len(cls_scores)): 
+    corners = deltas_2_corners(anc_box=anc_boxes, deltas=pred_locs)  
 
-        best_box = apply_bb_deltas(anc_boxes[max_cls_scores_idxs[i]][0], pred_locs[i][max_cls_scores_idxs[i]][0])
-        for j in range(len(cls_scores[i])): 
-            if j == max_cls_scores_idxs[i]: 
-                continue
-            
-            current_box = apply_bb_deltas(anc_boxes[j], pred_locs[i][j]) 
-            
-            iou = get_iou(best_box, current_box)
+    best_boxes = corners[torch.arange(corners.size(0)), max_cls_score_idx]
 
-            if iou.item() > 0.1: 
-                mask[i][j] = 0
+    mask |= nms_iou(best_box=best_boxes, test_box=corners, nms_thresh=nms_thresh)
+    
+    _, sorted_idxs = torch.sort(cls_scores, descending=True)
+    sorted_idxs = sorted_idxs[:, :top_n]
+    top_n_corners = torch.zeros((corners.shape[0], top_n, 2, 3)).to(corners.device)
+
+    for i in range(corners.shape[0]): 
+        top_n_corners[i] = corners[i, :top_n, :, :]
+        
+    return top_n_corners, mask
 
 def weight_init(m): 
     if isinstance(m, torch.nn.Conv3d): 
@@ -361,3 +406,24 @@ def generate_roi_input(pred_deltas, gt_deltas, cls_scores, y, anc_box_list):
     roi_y = torch.stack(roi_y)
 
     return roi_y, roi_corners, roi_gt_deltas
+
+"""
+args: 
+    - list of anchor box locations 
+    - the suggested deltas output by regression head of RPN 
+
+returns: 
+    - an array of [batch_size, num_anchor_boxes, 2, 3]
+    - the last 2 dimensions come from having 2 corners with 3 coordinates each 
+"""
+def make_corners(anc_boxes, pred_deltas): 
+    corners = torch.zeros(pred_deltas.shape[0], pred_deltas.shape[1], 2, 3).cuda()
+
+    # Loop through all crops in mini-batch  
+    for i in range(len(pred_deltas)):
+        tmp = [deltas_2_corners(anc_boxes[x], pred_deltas[i][x]) for x in range(len(pred_deltas[i]))]
+        corners[i] = torch.tensor(tmp)
+
+    print(corners.shape)
+
+    return corners

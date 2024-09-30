@@ -38,10 +38,14 @@ class ROI(nn.Module):
         self.reg = torch.nn.Linear(1024, 4)
 
     def forward(self, x):
-        x = self.flatten(x)
+        orig_shape = x.shape
+        x = x.view(x.shape[0] * x.shape[1], -1).contiguous()
     
         cls = self.cls(x)
         reg = self.reg(x)
+
+        cls = cls.view(orig_shape[0], orig_shape[1], -1).contiguous()
+        reg = reg.view(orig_shape[0], orig_shape[1], -1).contiguous()
     
         return cls, reg 
 
@@ -51,26 +55,45 @@ class CropProposals(nn.Module):
 
         self.pool = nn.AdaptiveMaxPool3d(output_size=2)
 
-    def forward(self, fm, corners, device): 
-        rv = torch.zeros((len(fm), len(corners[0]), 128, 2, 2, 2))
-        rv = rv.to(device)
-    
-        for i in range(len(fm)): 
-            for j in range(len(corners[0])):
+    def forward(self, fm: torch.Tensor, corners: torch.Tensor) -> torch.Tensor: 
+        corners = corners / 4  
 
-                p1 = [int(corners[i][j][0][x].item() / 4) for x in range(3)]
-                p1 = [p1[x] if p1[x] > 0 else 0 for x in range(3)]
-                p1 = [p1[x] if p1[x] < 21 else 21 for x in range(3)]
-                
-                p2 = [int(corners[i][j][1][x].item() / 4) for x in range(3)]
-                p2 = [p2[x] if (p2[x] - p1[x]) >= 2 else p1[x] + 2 for x in range(3)]
+        LL = corners[:, :, 0, :]
+        UR = corners[:, :, 1, :]
 
-                x1, y1, z1 = p1
-                x2, y2, z2 = p2
+        LL = torch.clamp(LL, 0, 21).to(LL.device)
+        UR = torch.where(UR - LL >= 2, UR, LL + 2).clamp(2, 23).to(UR.device)
 
-                proposal_fm = fm[i, :, x1:x2, y1:y2, z1:z2]
-                proposal_fm = self.pool(proposal_fm)
+        proposals = torch.empty(fm.shape[0], corners.shape[1], fm.shape[1], 2, 2, 2).to(fm.device)
+        fm = fm.clone()
 
-                rv[i][j] = proposal_fm
-        
-        return rv
+        """
+        for j in range(corners.shape[1]): 
+            x1 = LL[:, j, 0].int()
+            x2 = UR[:, j, 0].int()
+
+            y1 = LL[:, j, 1].int()
+            y2 = UR[:, j, 1].int()
+
+            z1 = LL[:, j, 2].int()
+            z2 = UR[:, j, 2].int()
+
+            proposal = self.pool(fm[:, :, x1:x2, y1:y2, z1:z2])
+            proposals[:, j, :, : , :, :] = proposal
+        """
+
+        for i in range(corners.shape[0]): 
+            for j in range(corners.shape[1]): 
+                x1 = int(LL[i, j, 0].item())
+                x2 = int(UR[i, j, 0].item())
+
+                y1 = int(LL[i, j, 1].item())
+                y2 = int(UR[i, j, 1].item())
+
+                z1 = int(LL[i, j, 2].item())
+                z2 = int(UR[i, j, 2].item())
+
+                proposal = self.pool(fm[i, :, x1:x2, y1:y2, z1:z2])
+                proposals[i, j, :, : , :, :] = proposal
+
+        return proposals

@@ -87,11 +87,11 @@ def main():
 
                 anc_box_list = anc_box_list.to(f'cuda:{rpn.device_ids[0]}')
                 start = time.time()
-                rpn_to_roi(cls_scores=pred_cls_scores, pred_locs=pred_anch_locs, anc_boxes=anc_box_list)
+                corners, mask = rpn_to_roi(cls_scores=pred_cls_scores, pred_locs=pred_anch_locs, anc_boxes=anc_box_list)
                 end = time.time()
                 print(f'RPN output to ROI input time: {end - start}.')
+    
                 exit()
-
                 update_cm(y, pred_cls_scores, train_cm)
                 
                 sampled_pred, sampled_target = sample_anchor_boxes(pred_cls_scores, y) 
