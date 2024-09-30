@@ -59,20 +59,13 @@ def main():
     crp.to(f'cuda:{crp.device_ids[0]}')
 
     # Create optimizer and LR scheduler 
-    rpn_optimizer = optim.SGD(list(fe.parameters()) + list(rpn.parameters()), lr=0.01, weight_decay=0.0001, momentum=0.9)
-    roi_optimizer = optim.SGD(list(roi.parameters()), lr=0.01, weight_decay=0.0001, momentum=0.9)
-    
-    rpn_scheduler = optim.lr_scheduler.StepLR(rpn_optimizer, step_size=50, gamma=0.1)
-    roi_scheduler = optim.lr_scheduler.StepLR(roi_optimizer, step_size=50, gamma=0.1)
-    
-    rpn_reg_loss_func = RegLoss()
-    rpn_cls_loss_func = ClsLoss()
+    optimizer = optim.SGD(list(fe.parameters()) + list(rpn.parameters()) + list(roi.parameters()), lr=0.01, weight_decay=0.0001, momentum=0.9) 
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
 
     epochs = 100
     for e in range(epochs): 
 
-        rpn_train_loss = 0
-        roi_train_loss = 0
+        train_loss = 0
         train_cm = [0, 0, 0, 0]
         
         fe.train()
@@ -92,24 +85,11 @@ def main():
                 y = y.to(f'cuda:{rpn.device_ids[0]}')
                 bb_y = bb_y.to(f'cuda:{rpn.device_ids[0]}')
                             
-                rpn_optimizer.zero_grad()
-                roi_optimizer.zero_grad()
+                optimizer.zero_grad()
                 # FE + RPN OPERATIONS 
 
                 fm = fe(x)
                 pred_anch_locs, pred_cls_scores = rpn(fm)
-
-                update_cm(y, pred_cls_scores, train_cm)
-                
-                sampled_pred, sampled_target = sample_anchor_boxes(pred_cls_scores, y) 
-
-                rpn_cls_loss = rpn_cls_loss_func(sampled_pred, sampled_target)
-                rpn_reg_loss = rpn_reg_loss_func(y, pred_anch_locs, bb_y)
-
-                rpn_loss = rpn_cls_loss + rpn_reg_loss
-                rpn_loss.backward(retain_graph=True)
-
-                rpn_train_loss += rpn_loss.item()
 
                 # BEGIN ROI OPERATIONS 
 
@@ -119,7 +99,7 @@ def main():
 
                 start = time.time()
                 corners, mask, indexs = rpn_to_roi(cls_scores=pred_cls_scores, pred_locs=pred_anch_locs, 
-                                           anc_boxes=anc_box_list, nms_thresh=0.1, top_n=top_n)
+                                                   anc_boxes=anc_box_list, nms_thresh=0.1, top_n=top_n)
                 end = time.time()
                 #print(f'IOU NMS time: {end - start}.')
 
@@ -148,13 +128,15 @@ def main():
                 top_n_bb_y = torch.stack(top_n_bb_y)
                 final_mask = torch.stack(final_mask)
 
+                update_cm(top_n_y, pred_cls_scores, train_cm)
+
                 if (top_n_y == 1.).sum() == 0: 
                     pos_weight = (top_n_y == 0).sum()
                 else: 
                     pos_weight = (top_n_y == 0.).sum() / (top_n_y == 1.).sum()
 
-                roi_cls_loss = F.binary_cross_entropy_with_logits(pred_cls_scores, top_n_y, pos_weight=pos_weight, reduction='none')
-                roi_reg_loss = F.smooth_l1_loss(pred_anch_locs, top_n_bb_y, reduction='none', beta=1)
+                cls_loss = F.binary_cross_entropy_with_logits(pred_cls_scores, top_n_y, pos_weight=pos_weight, reduction='none')
+                reg_loss = F.smooth_l1_loss(pred_anch_locs, top_n_bb_y, reduction='none', beta=1)
 
                 final_mask &= (top_n_y != -1)
 
@@ -164,55 +146,45 @@ def main():
                 reg_mask = reg_mask.float()
                 final_mask = final_mask.float()
 
-                roi_cls_loss = final_mask * roi_cls_loss
-                roi_cls_loss = 0.5 * roi_cls_loss
+                cls_loss = final_mask * cls_loss
+                cls_loss = 0.5 * cls_loss
 
-                roi_reg_loss = torch.sum(roi_reg_loss, dim=-1)
-                roi_reg_loss = reg_mask * roi_reg_loss
+                reg_loss = torch.sum(reg_loss, dim=-1)
+                reg_loss = reg_mask * reg_loss
 
-                roi_reg_loss = roi_reg_loss.sum() / len(top_n_y)
-                roi_cls_loss = roi_cls_loss.sum() / len(top_n_y)
+                cls_loss = cls_loss.sum() / len(top_n_y)
+                reg_loss = reg_loss.sum() / len(top_n_y)
 
-                roi_loss = roi_reg_loss + roi_cls_loss
-                roi_loss.backward()
+                loss = cls_loss + reg_loss
+                loss.backward()
 
-                roi_train_loss += roi_loss.item()
+                train_loss += loss.item()
 
                 # Clip gradients and update parameters  
                 torch.nn.utils.clip_grad_norm_(fe.parameters(), 1.0)
                 torch.nn.utils.clip_grad_norm_(rpn.parameters(), 1.0)
                 torch.nn.utils.clip_grad_norm_(roi.parameters(), 1.0)
 
-                rpn_optimizer.step() 
-                roi_optimizer.step()
+                optimizer.step() 
 
                 logger.report_scalar(
-                    "RPN Loss", "Loss", iteration=e * len(train_loader) + idx, value=rpn_loss.item()
-                 )
-                logger.report_scalar(
-                    "ROI Loss", "Loss", iteration=e * len(train_loader) + idx, value=roi_loss.item()
+                    "Loss", "Loss", iteration=e * len(train_loader) + idx, value=loss.item()
                 )
-
-                pbar.set_postfix(rpn_loss=rpn_loss.item(), roi_loss=roi_loss.item(), lr=rpn_optimizer.param_groups[0]['lr'])
+    
+                pbar.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
 
         # Take average of losses using the number of batches
-        epoch_rpn_train_loss = rpn_train_loss / len(train_loader)
-        epoch_roi_train_loss = roi_train_loss / len(train_loader)
-
+        epoch_train_loss = train_loss / len(train_loader)
 
         logger.report_scalar(
-            "Epoch RPN Loss", "Loss", iteration=e, value=epoch_rpn_train_loss
+            "Epoch Loss", "Loss", iteration=e, value=epoch_train_loss
         )
-        logger.report_scalar(
-            "Epoch ROI Loss", "Loss", iteration=e, value=epoch_roi_train_loss
-        )
-      
+
         # Print epoch losses and confusion matrix statistics
-        print(f'finished epoch {e}. RPN Train Loss: {epoch_rpn_train_loss}. ROI Train Loss: {epoch_roi_train_loss}.')
+        print(f'finished epoch {e}. Train Loss: {epoch_train_loss}.')
         print(f'train [tp, tn, fp, fn]: [{train_cm[0]}, {train_cm[1]}, {train_cm[2]}, {train_cm[3]}].')
 
-        rpn_scheduler.step()
-        roi_scheduler.step()
+        scheduler.step()
 
     return 
 

@@ -77,7 +77,7 @@ def nms_iou(best_box: torch.Tensor, test_box: torch.Tensor, nms_thresh: float) -
     zeros = torch.zeros(3).to(test_box.device)
 
     # Do this for every image in batch 
-    for i in range(32): 
+    for i in range(best_box.shape[0]): 
         # Begin IoU calculation
         I1 = torch.maximum(best_box[i, 0, :], test_box[i, :, 0, :])
         I2 = torch.minimum(best_box[i, 1, :], test_box[i, :, 1, :])
@@ -251,7 +251,7 @@ def rpn_to_roi(cls_scores, pred_locs, anc_boxes, nms_thresh, top_n):
     for i in range(corners.shape[0]): 
         top_n_corners[i] = corners[i, :top_n, :, :]
         
-    return top_n_corners, mask
+    return top_n_corners, mask, sorted_idxs
 
 def weight_init(m): 
     if isinstance(m, torch.nn.Conv3d): 
