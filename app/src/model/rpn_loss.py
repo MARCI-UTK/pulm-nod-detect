@@ -14,7 +14,7 @@ class RegLoss(nn.Module):
         mask = mask.permute(0, 2, 1)
 
         for i in range(len(loss)): 
-            rv += (loss[i] * mask[i]).sum()
+            rv += (loss[i] * mask[i]).mean()
         
         return rv / len(loss)
     
@@ -23,16 +23,19 @@ class ClsLoss(nn.Module):
         super(ClsLoss, self).__init__()
 
     def forward(self, pred, targets):
+        rv = 0
         
         if (targets == 1.).sum() == 0: 
             pos_weight = (targets == 0).sum()
         else: 
             pos_weight = (targets == 0.).sum() / (targets == 1.).sum()
 
-        loss = F.binary_cross_entropy_with_logits(input=pred, target=targets, pos_weight=pos_weight, reduction='mean')
+        loss = F.binary_cross_entropy_with_logits(input=pred, target=targets, pos_weight=pos_weight, reduction='none')
+        for i in range(len(loss)): 
+            rv += 0.5 * (loss[i]).nonzero().mean()
         
-        return 0.5 * loss
-    
+        return rv / len(loss)
+         
 class ValClsLoss(nn.Module):
     def __init__(self):
         super(ValClsLoss, self).__init__()
