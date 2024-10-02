@@ -87,7 +87,7 @@ def main():
                 roi_optimizer.zero_grad()
 
                 # Get region proposals 
-                rpn_loss, fm, cls_scores, anc_locs = rpn_iteration(data, fe, rpn, rpn_optimizer)
+                rpn_loss, fm, cls_scores, anc_locs = rpn_iteration(data, fe, rpn)
 
                 # Backprop and update parameters for RPN
                 rpn_loss.backward()
@@ -107,7 +107,7 @@ def main():
                 
                 # Classify output of RPN using ROI
                 roi_loss = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
-                                         roi_optimizer, cls_scores, anc_locs, 2500)
+                                         cls_scores, anc_locs, 2500)
                 
                 # Backprop and update parameters for ROI
                 roi_loss.backward()
@@ -124,13 +124,13 @@ def main():
         roi.eval()
         for idx, data in enumerate(val_loader):
             # Get region proposals 
-            rpn_loss, fm, cls_scores, anc_locs = rpn_iteration(data, fe, rpn, rpn_optimizer)
+            rpn_loss, fm, cls_scores, anc_locs = rpn_iteration(data, fe, rpn)
 
             anc_box_list = anc_box_list.to(f'cuda:{roi.device_ids[0]}')
             
             # Classify output of RPN using ROI
             roi_loss = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
-                                        roi_optimizer, cls_scores, anc_locs, 2500)
+                                     cls_scores, anc_locs, 2500)
          
             rpn_val_loss += rpn_loss.item()
             roi_val_loss += roi_loss.item() 

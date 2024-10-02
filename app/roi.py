@@ -84,8 +84,9 @@ class CropProposals(nn.Module):
 
         return proposals
     
+import time
 def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper, 
-                  optimizer, cls_scores, anc_locs, top_n): 
+                  cls_scores, anc_locs, top_n): 
 
     # Make labels correct size 
     y = y.unsqueeze(1)
@@ -93,10 +94,14 @@ def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper,
     y = y.to(f'cuda:{roi.device_ids[0]}')
     bb_y = bb_y.to(f'cuda:{roi.device_ids[0]}')
 
+    start = time.time()
     corners, mask, indexs = rpn_to_roi(cls_scores=cls_scores, pred_locs=anc_locs, 
                                        anc_boxes=anc_boxes, nms_thresh=0.1, top_n=top_n)
     
     proposals = cropper(fm, corners)
+    end = time.time()
+
+    print(end - start)
 
     pred_cls_scores, pred_anch_locs = roi(proposals)
 

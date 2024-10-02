@@ -77,7 +77,7 @@ def get_anc_boxes(centers):
 
     return anchor_boxes
 
-def rpn_iteration(data, feature_extractor, rpn, optimizer): 
+def rpn_iteration(data, feature_extractor, rpn): 
     fname, x, y, bb_y = data
 
     # Make labels correct size 
