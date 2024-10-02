@@ -14,7 +14,7 @@ class RegLoss(nn.Module):
         mask = mask.permute(0, 2, 1)
 
         for i in range(len(loss)): 
-            rv += (loss[i] * mask[i]).mean()
+            rv += (loss[i][mask[i]]).mean()
         
         return rv / len(loss)
     
@@ -32,7 +32,7 @@ class ClsLoss(nn.Module):
 
         loss = F.binary_cross_entropy_with_logits(input=pred, target=targets, pos_weight=pos_weight, reduction='none')
         for i in range(len(loss)): 
-            rv += 0.5 * (loss[i]).nonzero().mean()
+            rv += 0.5 * (loss[i]).mean()
         
         return rv / len(loss)
          

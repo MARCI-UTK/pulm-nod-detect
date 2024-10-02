@@ -6,6 +6,7 @@ import itertools
 from torch.utils.data import DataLoader
 from src.model.data import CropDataset
 from itertools import chain, combinations
+import torch.nn as nn
 
 def scanPathToId(path: str) -> str: 
     return path.split('/')[-1][0:-4]
@@ -255,9 +256,9 @@ def rpn_to_roi(cls_scores, pred_locs, anc_boxes, nms_thresh, top_n):
 
 def weight_init(m): 
     if isinstance(m, torch.nn.Conv3d): 
-        torch.nn.init.xavier_uniform_(m.weight, gain=np.sqrt(2))
+        torch.nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
     elif isinstance(m, torch.nn.Linear): 
-        torch.nn.init.xavier_uniform_(m.weight, gain=np.sqrt(2))
+        torch.nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
 
 def update_cm(y, pred, cm): 
     pred_binary = torch.where(pred > 0.5, 1., 0.)
@@ -266,6 +267,16 @@ def update_cm(y, pred, cm):
     cm[1] += ((pred_binary == 0.) & (y == 0.)).sum().item()
     cm[2] += ((pred_binary == 1.) & (y == 0.)).sum().item()
     cm[3] += ((pred_binary == 0.) & (y == 1.)).sum().item()
+
+def get_pos_weight_val(y): 
+    pos_weight = 0
+
+    if (y == 1.).sum() == 0: 
+        pos_weight = (y == 0).sum()
+    else: 
+        pos_weight = (y == 0.).sum() / (y == 1.).sum()
+
+    return pos_weight
 
 def makeDataLoaders(): 
     dataPath = '/data/marci/luna16/'
