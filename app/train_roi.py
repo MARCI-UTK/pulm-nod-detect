@@ -84,6 +84,9 @@ def main():
         roi.train()
         with tqdm(train_loader) as pbar:
             for idx, data in enumerate(pbar):
+                rpn_optimizer.zero_grad()
+                roi_optimizer.zero_grad()
+                
                 fname, x, y, bb_y = data
 
                 # This is used for logging 
