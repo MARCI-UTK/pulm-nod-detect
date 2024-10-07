@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.util.util import get_pos_weight_val, update_cm, rpn_to_roi
+from src.util.util import get_pos_weight_val, criterion, rpn_to_roi
 
 from src.model.feature_extractor import FeatureExtractor
 from rpn import RPN
@@ -119,13 +119,12 @@ def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper,
     top_n_bb_y = torch.stack(top_n_bb_y)
     final_mask = torch.stack(final_mask)
 
-    #update_cm(top_n_y, pred_cls_scores, train_cm)
-
     final_mask = final_mask & (top_n_y != -1)
 
     pos_weight = get_pos_weight_val(top_n_y)
 
     roi_cls_loss = F.binary_cross_entropy_with_logits(pred_cls_scores, top_n_y, pos_weight=pos_weight, reduction='none')
+    #roi_cls_loss = criterion(pred_cls_scores, top_n_y)
     roi_cls_loss = roi_cls_loss.clone() * final_mask.float()
     roi_cls_loss = roi_cls_loss.sum() / (roi_cls_loss != 0).sum()
     roi_cls_loss = 0.5 * roi_cls_loss
@@ -142,4 +141,4 @@ def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper,
 
     roi_loss = roi_reg_loss + roi_cls_loss   
 
-    return roi_loss
+    return roi_loss, pred_cls_scores, top_n_y

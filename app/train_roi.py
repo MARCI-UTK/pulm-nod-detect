@@ -41,20 +41,20 @@ def main():
 
     fe = FeatureExtractor()
     fe.apply(weight_init)
-    fe = torch.nn.DataParallel(fe, device_ids=[1,2,3])
+    fe = torch.nn.DataParallel(fe, device_ids=[0,1,2,3])
     fe.to(f'cuda:{fe.device_ids[0]}')
 
     rpn = RPN(128, 512, 3)
-    rpn = torch.nn.DataParallel(rpn, device_ids=[1,2,3])
+    rpn = torch.nn.DataParallel(rpn, device_ids=[0,1,2,3])
     rpn.to(f'cuda:{rpn.device_ids[0]}')
 
     roi = ROI()
     roi.apply(weight_init)
-    roi = torch.nn.DataParallel(roi, device_ids=[1,2,3])
+    roi = torch.nn.DataParallel(roi, device_ids=[0,1,2,3])
     roi.to(f'cuda:{roi.device_ids[0]}')
 
     crp = CropProposals()
-    crp = torch.nn.DataParallel(crp, device_ids=[1,2,3])
+    crp = torch.nn.DataParallel(crp, device_ids=[0,1,2,3])
     crp.to(f'cuda:{crp.device_ids[0]}')
 
     # Create optimizer and LR scheduler 
@@ -106,8 +106,10 @@ def main():
                 anc_box_list = anc_box_list.to(f'cuda:{roi.device_ids[0]}')
                 
                 # Classify output of RPN using ROI
-                roi_loss = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
-                                         cls_scores, anc_locs, 2500)
+                roi_loss, cls_scores, y = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
+                                                        cls_scores, anc_locs, 2500)
+
+                update_cm(y, cls_scores, train_cm)
                 
                 # Backprop and update parameters for ROI
                 roi_loss.backward()
@@ -127,11 +129,18 @@ def main():
             rpn_loss, fm, cls_scores, anc_locs = rpn_iteration(data, fe, rpn)
 
             anc_box_list = anc_box_list.to(f'cuda:{roi.device_ids[0]}')
-            
+            _, _, y, bb_y = data
+             
             # Classify output of RPN using ROI
             roi_loss = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
                                      cls_scores, anc_locs, 2500)
          
+            # Classify output of RPN using ROI
+            roi_loss, cls_scores, y = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
+                                                    cls_scores, anc_locs, 2500)
+
+            update_cm(y, cls_scores, val_cm)
+
             rpn_val_loss += rpn_loss.item()
             roi_val_loss += roi_loss.item() 
 
@@ -140,7 +149,6 @@ def main():
         epoch_roi_train_loss = roi_train_loss / len(train_loader)
         epoch_rpn_val_loss = rpn_val_loss / len(val_loader)
         epoch_roi_val_loss = roi_val_loss / len(val_loader)
-
 
         logger.report_scalar(
             "Epoch RPN Loss", " Train Loss", iteration=e, value=epoch_rpn_train_loss

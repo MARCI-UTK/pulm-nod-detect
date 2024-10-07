@@ -1,7 +1,7 @@
 import numpy as np 
 import itertools
 import os
-from src.util.util import get_iou, xyzd_2_2corners, corners_2_xyzd
+from src.util.util import xyzd_2_2corners, criterion
 import matplotlib.pyplot as plt 
 from matplotlib.patches import Rectangle
 import torch.nn as nn 
@@ -95,6 +95,7 @@ def rpn_iteration(data, feature_extractor, rpn):
     pos_weight = get_pos_weight_val(sampled_target)
 
     rpn_cls_loss = F.binary_cross_entropy_with_logits(sampled_pred, sampled_target, pos_weight=pos_weight, reduction='mean')
+    #rpn_cls_loss = criterion(sampled_pred, sampled_target).mean()
     rpn_cls_loss = 0.5 * rpn_cls_loss
 
     rpn_reg_loss = F.smooth_l1_loss(pred_anch_locs, bb_y, beta=1, reduction='none')

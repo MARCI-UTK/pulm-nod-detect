@@ -271,12 +271,22 @@ def update_cm(y, pred, cm):
 def get_pos_weight_val(y): 
     pos_weight = 0
 
-    if (y == 1.).sum() == 0: 
-        pos_weight = (y == 0).sum()
+    n_pos = (y == 1.).sum()
+    n_neg = (y == 0.).sum()
+
+    if n_pos == 0: 
+        pos_weight = n_neg
     else: 
-        pos_weight = (y == 0.).sum() / (y == 1.).sum()
+        pos_weight = n_neg / n_pos
 
     return pos_weight
+
+    norm = (pos_weight * n_pos) + n_neg
+
+    w_p = pos_weight / norm
+    w_n = 1 / norm
+
+    return w_p, w_n
 
 def makeDataLoaders(): 
     dataPath = '/data/marci/luna16/'
@@ -317,124 +327,10 @@ def powerset(iterable):
     s = list(iterable)
     return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
 
-def nms(pred_y, y, boxes): 
-    pred_y = pred_y.squeeze()
-    y = y.squeeze()
+def criterion(pred, target): 
+    w_p, w_n = get_pos_weight_val(target)
 
-    for i in range(len(pred_y)): 
-        #print(f'before: {(pred_y[i] != -1).sum()}')
-        tmp_pred_y = pred_y[i]
-        tmp_b = boxes[i]
-        tmp_y = y[i]
+    pred = torch.clamp(pred, min=1e-8, max=1-1e-8)  
+    loss =  (w_p * (target * torch.log(pred))) + (w_n * ((1 - target) * torch.log(1 - pred)))
 
-        best_score = torch.argmax(tmp_pred_y)
-        best_b = tmp_b[best_score, :]
-
-        for j in range(len(tmp_b)): 
-            if j == best_score: 
-                continue 
-        
-            iou = get_iou(best_b, tmp_b[j])
-
-            if iou > 0.1: 
-                tmp_y[j] = -1.
-                tmp_pred_y[j] = -1
-                tmp_b[j] = torch.tensor([[-1., -1., -1.], [-1., -1., -1.]])
-        
-        pred_y[i] = tmp_pred_y
-        boxes[i]  = tmp_b
-        y[i] = tmp_y
-
-        #print(f'after: {(pred_y[i] != -1).sum()}') 
-    
-    return pred_y, y, boxes
-    
-def threshold_proposals(pred_deltas, gt_deltas, cls_scores, targets, corners):
-    cls_scores = cls_scores.squeeze()
-    targets    = targets.squeeze()
-
-    mask = ((targets != -1) & (cls_scores > 0.12))
-    
-    idxs = torch.masked_fill(torch.cumsum(mask.int(), dim=1), ~mask, 0)
-    
-    cls_scores = torch.scatter(input=torch.full_like(cls_scores, -1), dim=1, index=idxs, src=cls_scores)
-    targets    = torch.scatter(input=torch.full_like(targets, -1), dim=1, index=idxs, src=targets)
-
-    box_idxs = idxs[:, :, None].expand(pred_deltas.size(0), -1, pred_deltas.size(-1))
-
-    pred_deltas = torch.scatter(input=torch.full_like(pred_deltas, -1), dim=1, index=box_idxs, src=pred_deltas)
-    gt_deltas   = torch.scatter(input=torch.full_like(gt_deltas, -1), dim=1, index=box_idxs, src=gt_deltas)
-
-    corner_idxs = idxs[:, :, None, None].expand(corners.size(0), -1, corners.size(-2), corners.size(-1)) 
-    corners     = torch.scatter(input=torch.full_like(corners, -1), dim=1, index=corner_idxs, src=corners) 
-
-    cls_scores = cls_scores.unsqueeze(1)
-    targets    = targets.unsqueeze(1)
-
-    #print(cls_scores.shape, targets.shape, pred_deltas.shape, gt_deltas.shape, corners.shape)
-
-    return cls_scores, targets, pred_deltas, gt_deltas, corners
-
-def generate_roi_input(pred_deltas, gt_deltas, cls_scores, y, anc_box_list):  
-    roi_cls_scores = []
-    roi_y = []
-    roi_gt_deltas = []
-    roi_anc_boxs = []
-
-    roi_corners = torch.zeros((len(y), 200, 2, 3))
-
-    for i in range(len(y)): 
-        tmp_y = y.squeeze()
-        tmp_cls_scores = cls_scores.squeeze()
-
-        valid_idxs = (tmp_y[i] != -1)
-
-        tmp_cls_scores = tmp_cls_scores[i][valid_idxs] 
-        tmp_y = tmp_y[i][valid_idxs]
-        tmp_anc_boxs = anc_box_list[valid_idxs]
-        tmp_pred_deltas = pred_deltas[i][valid_idxs]
-        tmp_gt_deltas = gt_deltas[i][valid_idxs]
-
-        _, sorted_idxs = torch.sort(tmp_cls_scores, descending=True)
-
-        tmp_anc_boxs = tmp_anc_boxs[sorted_idxs]
-        tmp_pred_deltas = tmp_gt_deltas[sorted_idxs]
-
-        for p in range(len(tmp_pred_deltas)): 
-            modified_anc_box = apply_bb_deltas(tmp_anc_boxs[p].tolist(), tmp_pred_deltas[p].tolist())
-            corners = xyzd_2_2corners(modified_anc_box)
-
-            roi_corners[i][p] = torch.tensor(corners).cuda()
-    
-        roi_anc_boxs.append(anc_box_list[sorted_idxs])
-        roi_gt_deltas.append(tmp_gt_deltas[sorted_idxs])
-
-        roi_cls_scores.append(tmp_cls_scores[sorted_idxs])
-        roi_y.append(tmp_y[sorted_idxs])
-    
-    roi_gt_deltas = torch.stack(roi_gt_deltas)
-    roi_cls_scores = torch.stack(roi_cls_scores)
-    roi_y = torch.stack(roi_y)
-
-    return roi_y, roi_corners, roi_gt_deltas
-
-"""
-args: 
-    - list of anchor box locations 
-    - the suggested deltas output by regression head of RPN 
-
-returns: 
-    - an array of [batch_size, num_anchor_boxes, 2, 3]
-    - the last 2 dimensions come from having 2 corners with 3 coordinates each 
-"""
-def make_corners(anc_boxes, pred_deltas): 
-    corners = torch.zeros(pred_deltas.shape[0], pred_deltas.shape[1], 2, 3).cuda()
-
-    # Loop through all crops in mini-batch  
-    for i in range(len(pred_deltas)):
-        tmp = [deltas_2_corners(anc_boxes[x], pred_deltas[i][x]) for x in range(len(pred_deltas[i]))]
-        corners[i] = torch.tensor(tmp)
-
-    print(corners.shape)
-
-    return corners
+    return loss
