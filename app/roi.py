@@ -102,21 +102,25 @@ def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper,
     pred_cls_scores, pred_anch_locs = roi(proposals)
 
     top_n_y = []
+    top_n_bb = []
     top_n_bb_y = []
     final_mask = []
     y = y.squeeze()
     pred_cls_scores = pred_cls_scores.squeeze()
     for i in range(len(y)): 
         y_i = y[i]
-        b_i = bb_y[i] 
+        by_i = bb_y[i] 
+        bbox_i = pred_anch_locs[i]
         m_i = mask[i]
 
         top_n_y.append(y_i[indexs[i]])
-        top_n_bb_y.append(b_i[indexs[i]])
+        top_n_bb_y.append(by_i[indexs[i]])
+        top_n_bb.append(bbox_i)
         final_mask.append(m_i[indexs[i]])
 
     top_n_y = torch.stack(top_n_y)
     top_n_bb_y = torch.stack(top_n_bb_y)
+    top_n_bb = torch.stack(top_n_bb)
     final_mask = torch.stack(final_mask)
 
     final_mask = final_mask & (top_n_y != -1)
@@ -124,14 +128,13 @@ def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper,
     pos_weight = get_pos_weight_val(top_n_y)
 
     roi_cls_loss = F.binary_cross_entropy_with_logits(pred_cls_scores, top_n_y, pos_weight=pos_weight, reduction='none')
-    #roi_cls_loss = criterion(pred_cls_scores, top_n_y)
     roi_cls_loss = roi_cls_loss.clone() * final_mask.float()
     roi_cls_loss = roi_cls_loss.sum() / (roi_cls_loss != 0).sum()
     roi_cls_loss = 0.5 * roi_cls_loss
 
     final_mask = final_mask & (top_n_y == 1)
 
-    roi_reg_loss = F.smooth_l1_loss(pred_anch_locs, top_n_bb_y, reduction='none', beta=1)
+    roi_reg_loss = F.smooth_l1_loss(top_n_bb, top_n_bb_y, reduction='none', beta=1)
     roi_reg_loss = roi_reg_loss.clone() * final_mask.unsqueeze(2).float()
 
     if (roi_reg_loss != 0).sum() == 0: 
