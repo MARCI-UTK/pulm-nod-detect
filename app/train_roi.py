@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from clearml import Task
 from sklearn.metrics import roc_curve
 
-task = Task.init(project_name="Pulmonary Nodule Detection", task_name="ROI 2 Optimizers")
+task = Task.init(project_name="Pulmonary Nodule Detection", task_name="ROI 2 Optimizers, SGD w/ init LR of 0.001, NaN debug")
 logger = task.get_logger()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -45,6 +45,7 @@ def main():
     fe.to(f'cuda:{fe.device_ids[0]}')
 
     rpn = RPN(128, 512, 3)
+    rpn.apply(weight_init)
     rpn = torch.nn.DataParallel(rpn, device_ids=[0,1,2,3])
     rpn.to(f'cuda:{rpn.device_ids[0]}')
 
@@ -58,8 +59,8 @@ def main():
     crp.to(f'cuda:{crp.device_ids[0]}')
 
     # Create optimizer and LR scheduler 
-    rpn_optimizer = optim.SGD(list(fe.parameters()) + list(rpn.parameters()), lr=0.01, weight_decay=0.0001, momentum=0.9)
-    roi_optimizer = optim.SGD(list(roi.parameters()), lr=0.01, weight_decay=0.0001, momentum=0.9)
+    rpn_optimizer = optim.SGD(list(fe.parameters()) + list(rpn.parameters()), lr=0.001, weight_decay=0.0001, momentum=0.9)
+    roi_optimizer = optim.SGD(list(roi.parameters()), lr=0.001, weight_decay=0.0001, momentum=0.9)
     
     rpn_scheduler = optim.lr_scheduler.StepLR(rpn_optimizer, step_size=50, gamma=0.1)
     roi_scheduler = optim.lr_scheduler.StepLR(roi_optimizer, step_size=50, gamma=0.1)
