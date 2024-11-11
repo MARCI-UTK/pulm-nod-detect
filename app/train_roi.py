@@ -26,7 +26,7 @@ batch_size = 32
     
 def main(): 
     # This function needs to be better (take parameters)
-    train_loader, val_loader = makeDataLoaders()  
+    train_loader, val_loader = makeDataLoaders(batch_size=batch_size)  
 
     # Get centers for anchor boxes
     centers_list = get_centers(0, 0)

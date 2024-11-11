@@ -279,16 +279,9 @@ def get_pos_weight_val(y):
     else: 
         pos_weight = n_neg / n_pos
 
-    return pos_weight
+    return pos_weight 
 
-    norm = (pos_weight * n_pos) + n_neg
-
-    w_p = pos_weight / norm
-    w_n = 1 / norm
-
-    return w_p, w_n
-
-def makeDataLoaders(): 
+def makeDataLoaders(batch_size: int): 
     dataPath = '/data/marci/luna16/'
 
     img_paths = [os.path.join(dataPath, 'crops', f) for f in os.listdir(os.path.join(dataPath, 'crops'))]
@@ -304,7 +297,6 @@ def makeDataLoaders():
 
     train_data = CropDataset(img_paths=train_img_paths, label_paths=train_label_paths)
     val_data   = CropDataset(img_paths=val_img_paths, label_paths=val_label_paths)
-    batch_size = 32
     
     # 708 positive samples in training set 
     train_loader = DataLoader(
