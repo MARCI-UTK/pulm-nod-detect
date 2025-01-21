@@ -1,3 +1,4 @@
+
 import os
 import time
 import torch 
@@ -17,7 +18,7 @@ import matplotlib.pyplot as plt
 from clearml import Task
 from sklearn.metrics import roc_curve
 
-task = Task.init(project_name="Pulmonary Nodule Detection", task_name="ROI 2 Optimizers, SGD w/ init LR of 0.001, NaN debug")
+task = Task.init(project_name="Pulmonary Nodule Detection", task_name="ROI 2 Optimizers, SGD w/ init LR of 0.001, different loss division")
 logger = task.get_logger()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -88,12 +89,12 @@ def main():
                 roi_optimizer.zero_grad()
 
                 # Get region proposals 
-                rpn_loss, fm, cls_scores, anc_locs = rpn_iteration(data, fe, rpn)
+                rpn_loss, fm, cls_scores, anc_locs = rpn_iteration(data, fe, rpn) 
 
                 # Backprop and update parameters for RPN
                 rpn_loss.backward()
-                torch.nn.utils.clip_grad_norm_(fe.parameters(), 1.0)
-                torch.nn.utils.clip_grad_norm_(rpn.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(fe.parameters(), 5.0)
+                torch.nn.utils.clip_grad_norm_(rpn.parameters(), 5.0)
                 rpn_optimizer.step()
 
                 # Detach tensors needed for ROI operations from computation graph of RPN 
@@ -107,14 +108,14 @@ def main():
                 anc_box_list = anc_box_list.to(f'cuda:{roi.device_ids[0]}')
                 
                 # Classify output of RPN using ROI
-                roi_loss, cls_scores, y = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
-                                                        cls_scores, anc_locs, 2500)
+                roi_loss, cls_scores, y, mask = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
+                                                          cls_scores, anc_locs, 2500)
 
-                update_cm(y, cls_scores, train_cm)
+                update_cm(y, cls_scores, train_cm, mask)
                 
                 # Backprop and update parameters for ROI
                 roi_loss.backward()
-                torch.nn.utils.clip_grad_norm_(roi.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(roi.parameters(), 5.0)
                 roi_optimizer.step()
                 
                 rpn_train_loss += rpn_loss.item()
@@ -131,16 +132,12 @@ def main():
 
             anc_box_list = anc_box_list.to(f'cuda:{roi.device_ids[0]}')
             _, _, y, bb_y = data
-             
+            
             # Classify output of RPN using ROI
-            roi_loss = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
-                                     cls_scores, anc_locs, 2500)
-         
-            # Classify output of RPN using ROI
-            roi_loss, cls_scores, y = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
-                                                    cls_scores, anc_locs, 2500)
+            roi_loss, cls_scores, y, mask = roi_iteration(y, bb_y, fm, anc_box_list, roi, crp, 
+                                                          cls_scores, anc_locs, 250)
 
-            update_cm(y, cls_scores, val_cm)
+            update_cm(y, cls_scores, val_cm, mask)
 
             rpn_val_loss += rpn_loss.item()
             roi_val_loss += roi_loss.item() 

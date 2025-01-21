@@ -14,5 +14,22 @@ img = nib.load(train_labels[0])
 img = np.array(img.dataobj)
 img = np.transpose(img, (1, 0, 2))
 
-plt.imshow(img[:, :, img.shape[2] // 4], cmap=plt.bone())
+max_i = 0
+max_sum = 0
+for i in range(img.shape[2]): 
+
+    if img[:, :, i].sum() > max_sum: 
+        max_sum = img[:, :, i].sum()
+        max_i = i
+
+plt.imshow(img[:, :, max_i], cmap=plt.bone())
 plt.savefig('new_data.png')
+plt.cla()
+
+img = nib.load(train_imgs[0])
+img = np.array(img.dataobj)
+img = np.transpose(img, (1, 0, 2))
+
+plt.imshow(img[:, :, max_i], cmap=plt.bone())
+plt.savefig('img.png')
+plt.cla()

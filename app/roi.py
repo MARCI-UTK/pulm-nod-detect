@@ -130,6 +130,11 @@ def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper,
     roi_cls_loss = F.binary_cross_entropy_with_logits(pred_cls_scores, top_n_y, pos_weight=pos_weight, reduction='none')
     roi_cls_loss = roi_cls_loss.clone() * final_mask.float()
 
+    cls_cm_mask = final_mask.clone()
+
+    roi_cls_loss = roi_cls_loss.sum() / (final_mask == 1).sum()
+
+    """
     if (roi_cls_loss != 0).sum() == 0: 
         roi_cls_loss = roi_cls_loss.sum() / (roi_cls_loss != 0).sum()
         roi_cls_loss = 0.5 * roi_cls_loss
@@ -140,12 +145,19 @@ def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper,
     if (roi_cls_loss.isnan().any()): 
         print(roi_cls_loss)
         exit()
+    """
 
     final_mask = final_mask & (top_n_y == 1)
 
     roi_reg_loss = F.smooth_l1_loss(top_n_bb, top_n_bb_y, reduction='none', beta=1)
     roi_reg_loss = roi_reg_loss.clone() * final_mask.unsqueeze(2).float()
 
+    if (final_mask == 1).sum() == 0: 
+        roi_reg_loss = 0
+    else: 
+        roi_reg_loss = roi_reg_loss.sum() / (final_mask == 1).sum() 
+
+    """
     if (roi_reg_loss.isnan().any()): 
         print(roi_reg_loss)
         exit()
@@ -154,7 +166,8 @@ def roi_iteration(y, bb_y, fm, anc_boxes, roi, cropper,
         roi_reg_loss = 0
     else: 
         roi_reg_loss = roi_reg_loss.sum() / (roi_reg_loss != 0).sum()
+    """
 
     roi_loss = roi_reg_loss + roi_cls_loss   
 
-    return roi_loss, pred_cls_scores, top_n_y
+    return roi_loss, pred_cls_scores, top_n_y, cls_cm_mask

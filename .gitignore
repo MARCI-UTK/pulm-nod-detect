@@ -1,6 +1,6 @@
 venv/
-dataset/
-data/ 
-test_imgs/
-graphs/
 .DS_Store/
+runs/
+imgs/
+.vscode/
+*.txt

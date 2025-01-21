@@ -59,9 +59,6 @@ def xyzd_2_4corners(c):
     rv = torch.tensor([c0, c1, c2, c3, c4, c5, c6, c7])
     return rv
 
-def box_area(lower_left: torch.Tensor, upper_right: torch.Tensor) -> torch.Tensor: 
-    return 
-
 def nms_iou(best_box: torch.Tensor, test_box: torch.Tensor, nms_thresh: float) -> torch.Tensor: 
     ious = []
 
@@ -260,13 +257,20 @@ def weight_init(m):
     elif isinstance(m, torch.nn.Linear): 
         torch.nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
 
-def update_cm(y, pred, cm): 
-    pred_binary = torch.where(pred > 0.5, 1., 0.)
+def update_cm(y, pred, cm, mask):
 
-    cm[0] += ((pred_binary == 1.) & (y == 1.)).sum().item()
-    cm[1] += ((pred_binary == 0.) & (y == 0.)).sum().item()
-    cm[2] += ((pred_binary == 1.) & (y == 0.)).sum().item()
-    cm[3] += ((pred_binary == 0.) & (y == 1.)).sum().item()
+    for i in range(len(y)): 
+        idxs = (mask[i] != 0).nonzero(as_tuple=False).squeeze()
+
+        tmp_pred = torch.index_select(pred[i], 0, idxs)
+        tmp_y = torch.index_select(y[i], 0, idxs)
+    
+        tmp_binary = torch.where(tmp_pred > 0.75, 1., 0.)
+
+        cm[0] += ((tmp_binary == 1.) & (tmp_y == 1.)).sum().item()
+        cm[1] += ((tmp_binary == 0.) & (tmp_y == 0.)).sum().item()
+        cm[2] += ((tmp_binary == 1.) & (tmp_y == 0.)).sum().item()
+        cm[3] += ((tmp_binary == 0.) & (tmp_y == 1.)).sum().item()
 
 def get_pos_weight_val(y): 
     pos_weight = 0
@@ -326,3 +330,8 @@ def criterion(pred, target):
     loss =  (w_p * (target * torch.log(pred))) + (w_n * ((1 - target) * torch.log(1 - pred)))
 
     return loss
+ 
+
+def scan_level_accuracy(fname, y, pred_cls): 
+
+    return

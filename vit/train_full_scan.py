@@ -1,13 +1,15 @@
 import os
+import math
 import torch 
-from .vit import *
+from vit import *
 import torch.nn as nn
 from tqdm import tqdm
 from clearml import Task
 import torch.optim as optim
 import matplotlib.pyplot as plt
-from .dataset import ScanDataset
+from dataset import ScanDataset
 from torch.utils.data import DataLoader
+import numpy as np 
 
 
 def calculate_metrics(logits, metrics):
@@ -41,8 +43,8 @@ def calculate_metrics(logits, metrics):
 
     return (acc, metrics)
     
-#task = Task.init(project_name="Pulmonary Nodule Detection", task_name="1st ViT Training")
-#logger = task.get_logger()
+task = Task.init(project_name="Pulmonary Nodule Detection", task_name="16 head ViT Training")
+logger = task.get_logger()
 
 config = {
         "patch_size": 16,
@@ -53,7 +55,7 @@ config = {
         "hidden_dropout_prob": 0.0,
         "attention_probs_dropout_prob": 0.0,
         "initializer_range": 0.02,
-        "image_size": 128,
+        "image_size": 208,
         "num_classes": 1,
         "num_channels": 1,
         "qkv_bias": True,
@@ -69,8 +71,6 @@ dataset = ScanDataset(img_paths=img_paths, label_path=label_path)
 
 batch_size = 8
 dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True)
-
-# NOTE: 7176 positive crops and 599 negative 
 
 model = ViT(config).cuda()
 model = torch.nn.DataParallel(model, device_ids=[0,1,2,3])
@@ -90,11 +90,13 @@ for e in range(10):
 
             fname, x, y = data
 
+            x = x.to(model.device_ids[0])
+
             y = y.to(model.device_ids[0])
             y = y.unsqueeze(1).float()
 
-            logits, attention_maps = model(x)
-
+            logits, attention_maps = model(x=x, output_attentions=True)
+            
             """
             # Concatenate the attention maps from all blocks
             attention_maps = torch.cat(attention_maps, dim=1)
@@ -108,23 +110,23 @@ for e in range(10):
             attention_maps = attention_maps.view(-1, size, size, size)
             # Resize the map to the size of the image
             attention_maps = attention_maps.unsqueeze(1)
-            attention_maps = nn.functional.interpolate(attention_maps, size=(96, 96, 96), mode='trilinear', align_corners=False)
+            attention_maps = nn.functional.interpolate(attention_maps, size=(208, 208, 208), mode='trilinear', align_corners=False)
             attention_maps = attention_maps.squeeze(1)
             # Plot the images and the attention maps
-            fig = plt.figure(figsize=(20, 10))
-            mask = np.concatenate([np.ones((96, 96, 96)), np.zeros((96, 96, 96))], axis=1)
+            fig = plt.figure(figsize=(40, 20))
+            mask = np.concatenate([np.ones((208, 208, 208)), np.zeros((208, 208, 208))], axis=1)
 
             img = x[1][0][x.shape[2] // 2].cpu().numpy()
             plt.imshow(img, cmap=plt.bone())
             # Mask out the attention map of the left image
-            extended_attention_map = np.concatenate((np.zeros((96, 96, 96)), attention_maps[1].detach().cpu().numpy()), axis=1)
+            extended_attention_map = np.concatenate((np.zeros((208, 208, 208)), attention_maps[1].detach().cpu().numpy()), axis=1)
             extended_attention_map = np.ma.masked_where(mask==1, extended_attention_map)
             plt.imshow(extended_attention_map[extended_attention_map.shape[0] // 2], alpha=0.5, cmap='jet')
             # Show the ground truth and the prediction
             plt.savefig('test_att_map.png')
-            """
+            """ 
 
-            #pos_weight = (y == 0).sum() / (y == 1).sum()
+            pos_weight = (y == 0).sum() / (y == 1).sum()
             loss = nn.functional.binary_cross_entropy_with_logits(logits, y, reduction='mean')
 
             loss.backward()
@@ -142,7 +144,6 @@ for e in range(10):
     print(f'finished epoch {e}. loss: {epoch_train_loss}. accuracy: {epoch_metrics[0]}')
     print(f'precision: {epoch_metrics[1]}. recall: {epoch_metrics[2]}. f1: {epoch_metrics[3]}.')
 
-    """
     logger.report_scalar(
         "ViT Epoch Loss", " Train Loss", iteration=e, value=epoch_train_loss
     )
@@ -150,4 +151,3 @@ for e in range(10):
     logger.report_scalar(
         "ViT Epoch Accuracy", " Train Accuracy", iteration=e, value=epoch_metrics[0]
     )
-    """

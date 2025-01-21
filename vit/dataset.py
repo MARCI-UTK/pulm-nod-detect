@@ -41,7 +41,7 @@ class ScanDataset(Dataset):
         img = torch.from_numpy(img).float().cuda()
 
         img = img.unsqueeze(0).unsqueeze(0)
-        img = torch.nn.functional.interpolate(img, (128, 128, 128), mode='trilinear', align_corners=False)
+        img = torch.nn.functional.interpolate(img, (208, 208, 208), mode='trilinear', align_corners=False)
         img = img.squeeze(0)
 
         img = (img - torch.min(img)) / (torch.max(img) - torch.min(img)) 
