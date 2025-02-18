@@ -33,29 +33,59 @@ class RawScan():
         self.cleanImg    = None 
         self.mask        = None
 
-        self.processScan()
-        self.writeProcessedScan()
+        self.process_scan()
+        self.write_processed_scan()
+
+    # Resize SimpleITK image to have a voxel spacing of 1mm^3
+    def resample_image(self, image: sitk.Image, target_spacing: tuple) -> sitk.Image: 
+        # (x, y, z) spacing in mm
+        original_spacing = image.GetSpacing()  
+
+        # (width, height, depth)
+        original_size = image.GetSize() 
+
+        # Compute new size to maintain aspect ratio
+        new_size = [
+            int(round(osz * osp / tsp)) 
+            for osz, osp, tsp in zip(original_size, original_spacing, target_spacing)
+        ]
+
+        interpolator = sitk.sitkBSpline
+
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetSize(new_size)
+        resampler.SetOutputSpacing(target_spacing)
+        resampler.SetInterpolator(interpolator)
+
+        resampler.SetOutputDirection(image.GetDirection())
+        resampler.SetOutputOrigin(image.GetOrigin())
+        
+        image = resampler.Execute(image)
+
+        return image
 
     # Read scan and mask, pass to processing function 
-    def processScan(self):
-        self.readMhd()
-        self.readMask()
-        self.cleanScan()
+    def process_scan(self):
+        self.read_image()
+        self.read_mask()
+        self.clean_scan()
 
     # Read scan and extract metadata
-    def readMhd(self):
+    def read_image(self):
         path = self.mhdPath
+        self.scanId = scanPathToId(path=path)
 
         img = sitk.ReadImage(fileName=path)
+        img = self.resample_image(image=img, target_spacing=(1.0, 1.0, 1.0))
 
-        self.scanId = scanPathToId(path=path)
-        self.rawImg = sitk.GetArrayFromImage(image=img)
         self.origin = img.GetOrigin()
         self.spacing = img.GetSpacing()
-
+        self.rawImg = sitk.GetArrayFromImage(image=img)
+    
     # Read segmenation mask 
-    def readMask(self): 
+    def read_mask(self): 
         mask = sitk.ReadImage(fileName=self.maskPath)
+        mask = self.resample_image(image=mask, target_spacing=(1.0, 1.0, 1.0))
         mask = sitk.GetArrayFromImage(image=mask)
         
         mask[mask > 0] = 255
@@ -63,7 +93,7 @@ class RawScan():
         self.mask = mask
 
     # Perform preprocessing operations on scan 
-    def cleanScan(self): 
+    def clean_scan(self): 
         cleanScan = []
         scan = self.rawImg
 
@@ -93,22 +123,22 @@ class RawScan():
         for _, row in scan_annotations.iterrows(): 
             loc = (row['coordX'], row['coordY'], row['coordZ'], row['diameter_mm'])
             nodule_locations.append(loc)
-        
+
         self.annotations = nodule_locations
     
     # Write processed image as .npy and metadata as .json files 
-    def writeProcessedScan(self): 
+    def write_processed_scan(self): 
         metadata = {
             'origin': self.origin, 
-            'spacing': self.spacing
+            'spacing': self.spacing,
+            'nodule': self.annotations
         }
 
         f = open(self.jsonPath, 'w')
         json.dump(metadata, f)
         f.close()
 
-        np.save(self.npyPath, self.cleanImg)
-        print(f'wrote data for {self.scanId}.')
+        np.savez_compressed(self.npyPath, img=self.cleanImg)
 
 # Class that holds preprocessed scan and its metadata for crop generation
 class CleanScan(): 

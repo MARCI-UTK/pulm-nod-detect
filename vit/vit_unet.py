@@ -1,2 +1,0 @@
-from .vit import ViT
-
